@@ -1,0 +1,11 @@
+DA:Real time stacks
+E00:Pollword in use
+E01:Cannot yield in this context
+E02:RTSupport cannot be reinstantiated
+E03:Unsupported OS or hardware
+E04:Out of memory in RTSupport
+E05:Unknown SWI for module RTSupport
+E06:Invalid priority
+E07:Too many RTSupport routines
+E08:Illegal routine handle
+E09:Unknown reason code in RTSupport
