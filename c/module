@@ -150,7 +150,7 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   if (getenv("RTSupport$Path") == NULL)
   {
     #define MY_PATH "Resources:$.Resources.RTSupport."
-    _swix(OS_SetVarVal, _INR(0,4), "RTSupport$Path", MY_PATH, sizeof MY_PATH, 0, 4);
+    _swix(OS_SetVarVal, _INR(0,4), "RTSupport$Path", MY_PATH, sizeof MY_PATH - 1, 0, 4);
   }
   {
 #ifndef ROM_MODULE

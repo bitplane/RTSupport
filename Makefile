@@ -209,7 +209,7 @@ resources-None: resources_common
 
 resources-: resources_common
 	IfThere LocalRes:CmdHelp Then ${TOKENCHECK} LocalRes:CmdHelp
-	FAppend ${RESFSDIR}.Messages LocalRes:Messages LocalRes:CmdHelp
+	IfThere LocalRes:CmdHelp Then FAppend ${RESFSDIR}.Messages LocalRes:Messages LocalRes:CmdHelp
 
 ${MERGEDMSGS}: LocalRes:Messages
 	${MKDIR} ${MERGEDMDIR}
