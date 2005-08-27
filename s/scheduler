@@ -160,6 +160,9 @@ ThreadResumed
         EXPORT  Pollword_PreEmpted
 Pollword_PreEmpted
         DCD     -1      ; thread has been pre-empted by another
+                        ; 1-byte offset from here is used to indicate that this thread is
+                        ; currently executing (may be pre-empted by an interrupt routine but
+                        ; not yet by another thread)
         EXPORT  Pollword_TimedOut
 Pollword_TimedOut
         DCD     -1      ; limiting time has been reached
@@ -413,6 +416,7 @@ next_priority ; r0,r3,r9,r11-r12,r14 required
         MOV     r10, r2 ; hang on to this for thread loop termination condition
         LDR     r1, [r12, r2, LSL #2] ; thread structure pointer
         LDR     r0, [r1, #Thread_Pollword]
+        BIC     r0, r0, #3           ; treat the executing thread the same as pre-empted ones
         TEQ     r0, r14_irq          ; give all other threads a chance first
         BNE     next_thread_no_check ; unless resuming a pre-empted one
         LDR     r0, [r1, #Thread_Priority]
@@ -435,6 +439,8 @@ next_thread_no_check ; r2-r3,r9-r12,r14 required
         BNE     next_thread
         LDR     r0, [r1, #Thread_Pollword]
         CMP     r9, #OverloadThreshold
+        BIC     r0, r0, #3  ; treat the executing thread the same as pre-empted ones
+                            ; (zero-ness of indirected value is not affected)
         TEQCS   r0, r14_irq
         BHI     next_thread ; threshold reached and not pre-empted
         LDRCC   r0, [r0]
@@ -474,6 +480,8 @@ switch_to_thread ; r1-r3,r12 required
         BLNE    PreEmpt
 resume_thread
         ; Set up new thread's environment
+        MSR     CPSR_c, #I32_bit :OR: SYS32_mode
+        ADR     r14_usr, Yielded
         MSR     CPSR_c, #I32_bit :OR: SVC32_mode
         ASSERT  Thread_R0 = 0
         ASSERT  Thread_R12 = 4
@@ -481,7 +489,13 @@ resume_thread
         ASSERT  Thread_SVCStackCopy = 12
         LDMIA   r1, {r0,r2-r4}
         MOV     r12, r2
-        ADD     r1, r1, #Thread_R13SVC
+        ADD     r1, r1, #Thread_Pollword
+        LDR     r2, =Pollword_PreEmpted + 1 ; ensure we get reentered after IRQs
+        MOV     r5, #0 ; timeout value is not important
+        MOV     r6, #0 ; ensure timeout is not used while executing
+        ASSERT  Thread_TimeoutFlag = Thread_Pollword + 8
+        STMIA   r1!, {r2,r5-r6}
+        ASSERT  Thread_R13SVC = Thread_TimeoutFlag + 4
         ASSERT  Thread_R10 = Thread_R13SVC + 4
         ASSERT  Thread_R13SYS = Thread_R13SVC + 8
         LDMIB   r1, {r10,r13_usr}^
@@ -496,8 +510,6 @@ resume_thread
         LDMIA   r1, {r1, r2}
         MSR     SPSR_cxsf, r2
         MOV     r11, #0
-        MSR     CPSR_c, #I32_bit :OR: SYS32_mode
-        MOV     r14_usr, pc
         MOVS    pc, r1
 Yielded
         MRS     r9, CPSR
@@ -565,6 +577,7 @@ return_to_foreground
         LDR     r13_irq, IRQStk ; flatten stack
         ; The foreground may have been resumed and then yielded.
         LDR     r11, [r12, #Thread_Pollword]
+        BIC     r11, r11, #3
         TEQ     r11, r14_irq
         BNE     %F50
         ; Or, the foreground may still be in a pre-empted state,
