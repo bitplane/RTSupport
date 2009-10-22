@@ -87,7 +87,7 @@ priority_t;
 /* The following have to be declared as code so that the compiler does not */
 /* attempt to relocate them. */
 extern void Pollword_PreEmpted(void);
-#define Pollword_PreEmpted (*(const uint32_t *) Pollword_TimedOut)
+#define Pollword_PreEmpted (*(const uint32_t *) Pollword_PreEmpted)
 extern void Pollword_TimedOut(void);
 #define Pollword_TimedOut (*(const uint32_t *) Pollword_TimedOut)
 

@@ -97,7 +97,7 @@ PrioritySize            *       :INDEX: @
 
         AREA    |RO$$Code|, CODE, READONLY
 
-PreEmptionRecovery ; this is actually just a template, copied into the per-thread structure
+PreEmptionRecovery
         ; Enter in SVC mode with interrupts disabled (needs to set up both r14_svc and r14_sys)
         ; with r13_svc and r13_sys already set up and r10 pointing to end of RecoveryRegs
 
@@ -342,8 +342,7 @@ Die
         MOV     r12, #-1
         STR     r12, Context
         BHI     %F99 ; must be in interrupt context
-        BLNE    SomethingsGoneWrong
-        BCC     %F99 ; we were actually in the foreground
+        BNE     %F98 ; IRQ stack has been flattened
         LDR     r12, ThreadTable
         LDR     r9, NTicks
         LDR     r3, Priority
@@ -351,6 +350,9 @@ Die
         LDR     r11, NThreads
         LDR     r14_irq, =Pollword_PreEmpted
         B       next_thread_no_check
+98
+        BL      SomethingsGoneWrong
+        ; drop through...
 99
         MSR     CPSR_c, #I32_bit :OR: SVC32_mode
         Return  , LinkNotStacked

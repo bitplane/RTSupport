@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include "kernel.h"
 #include "swis.h"
 
@@ -64,6 +65,10 @@
 * New type definitions
 *****************************************************************************/
 
+typedef struct _svcstack {
+  char *ptr;
+  struct _svcstack *next;
+} svcstack;
 
 /*****************************************************************************
 * Constants
@@ -72,7 +77,9 @@
 #define STACK_SIZE 8
 #define ROUTINES 127 /* at least 1024/STACK_SIZE - 1 */
 /* There is a minimum setting due to the fact that the dynamic area must be just over 1MB to ensure we have a MB-aligned address */
-#define DA_SIZE MIN(1024+STACK_SIZE+PAGE_SIZE, STACK_SIZE+STACK_SIZE+PAGE_SIZE+ROUTINES*STACK_SIZE)
+#define DA_SIZE MAX(1024+STACK_SIZE+PAGE_SIZE, STACK_SIZE+STACK_SIZE+PAGE_SIZE+ROUTINES*STACK_SIZE)
+
+#define EMERGENCY_STACKS 8 /* Keep a minimum of this many stacks allocated but unused, to ensure routines can still be registered even if we can't resize the dynamic area */
 
 
 /*****************************************************************************
@@ -81,13 +88,18 @@
 static bool static_OldKernel = false;
 static void *static_MessagesBuffer;
 static void *static_PriorityMessagesBuffer;
+static bool static_UseSparseArea; /* True for sparse DA where SVC stacks are mapped in as-needed, false for regular DA where everything is mapped in all the time */
 static uint32_t static_DANumber;
 static char *static_DA;
 static char *static_DAAllocPtr;
 static char *static_RoutineSVCStack;
 static char *static_LastStackBeforeMB;
 static char *static_LastStackBeforeEnd;
-
+static svcstack static_Stacks[ROUTINES];
+static svcstack *static_FreeStacks=0; /* Stacks which aren't allocated */
+static svcstack *static_EmergencyStacks=0; /* Spare stacks for when we can't change the dynamic area */
+static svcstack *static_ActiveStacks=0; /* Note: don't use this list for enumerating the stack addresses of active threads. This list is only used to collect together 'free' svcstack objects, ready for re-insertion into the FreeStacks or EmergencyStacks lists upon RT_Deregister */
+static int static_NumEmergency = 0; /* Number of entries in emergency list */
 
 /*****************************************************************************
 * Function prototypes - Private to this file
@@ -97,6 +109,7 @@ static _kernel_oserror *Register(uint32_t flags, const void *entry, uint32_t r0,
 static _kernel_oserror *Deregister(uint32_t flags, thread_t *handle);
 static _kernel_oserror *ChangePriority(uint32_t flags, thread_t * restrict handle, uint32_t priority, uint32_t * restrict r_priority);
 static _kernel_oserror *ReadInfo(uint32_t reason, uint32_t *r_value);
+static _kernel_oserror *RebalanceEmergencyList(void);
 
 
 /*****************************************************************************
@@ -253,12 +266,22 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   }
   if (!e)
   {
+    /* Check if we're running on a kernel with broken OS_DynamicArea 9/10 error handling */
+    int ver;
+    e = _swix(OS_Module,_INR(0,2) | _OUT(6),20,0,-1,&ver);
+    static_UseSparseArea = (ver >= 0x51500);
+  }
+  if (!e)
+  {
     /* Create the dynamic area to hold the SVC stacks */
     const char *da_name;
     e = mess_LookUpDirect("DA", &da_name, NULL);
     if (!e)
     {
-      e = _swix(OS_DynamicArea, _INR(0,8)|_OUT(1)|_OUT(3), 0, -1, 0, -1, (1<<7) + (1<<10), DA_SIZE*1024, 0, 0, da_name, &static_DANumber, &static_DA);
+      if(static_UseSparseArea)
+        e = _swix(OS_DynamicArea, _INR(0,8)|_OUT(1)|_OUT(3), 0, -1, 0, -1, (1<<7) + (1<<10), DA_SIZE*1024, 0, 0, da_name, &static_DANumber, &static_DA);
+      else
+        e = _swix(OS_DynamicArea, _INR(0,8)|_OUT(1)|_OUT(3), 0, -1, DA_SIZE*1024, -1, (1<<7), DA_SIZE*1024, 0, 0, da_name, &static_DANumber, &static_DA);
       if (!e)
       {
         DACreated = true;
@@ -267,7 +290,30 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
         static_LastStackBeforeMB = static_DA + ((static_RoutineSVCStack - static_DA - STACK_SIZE*1024 - PAGE_SIZE*1024) &~ PAGE_SIZE*1024);
         static_LastStackBeforeEnd = static_RoutineSVCStack + PAGE_SIZE*1024 + ((static_DA - static_RoutineSVCStack + DA_SIZE*1024 - PAGE_SIZE*1024) &~ PAGE_SIZE*1024);
         /* Page in the MB-aligned part of the DA */
-        e = _swix(OS_DynamicArea, _INR(0,3), 9, static_DANumber, static_RoutineSVCStack - STACK_SIZE*1024, STACK_SIZE*1024);
+        if(static_UseSparseArea)
+          e = _swix(OS_DynamicArea, _INR(0,3), 9, static_DANumber, static_RoutineSVCStack - STACK_SIZE*1024, STACK_SIZE*1024);
+        /* Fill in pointers */
+        char *ptr=static_DAAllocPtr;
+        for(int i=0;i<ROUTINES;i++)
+        {
+          ptr += STACK_SIZE*1024;
+          if (ptr == static_LastStackBeforeMB) ptr = static_RoutineSVCStack + PAGE_SIZE*1024;
+          static_Stacks[i].ptr = ptr;
+          static_Stacks[i].next = static_FreeStacks;
+          static_FreeStacks = &static_Stacks[i];
+        }
+        if(static_UseSparseArea)
+        {
+          /* Allocate the emergency stacks */
+          RebalanceEmergencyList();
+        }
+        else
+        {
+          /* Keep the code simple by moving everything onto the emergency list */
+          static_EmergencyStacks = static_FreeStacks;
+          static_FreeStacks = NULL;
+          static_NumEmergency = ROUTINES;
+        }
       }
     }
   }
@@ -515,97 +561,90 @@ static _kernel_oserror *Register(uint32_t flags, const void *entry, uint32_t r0,
     bool irqs_were_disabled = _kernel_irqs_disabled();
     if (!irqs_were_disabled) _kernel_irqs_off();
     /* Look for an address to use to store the routine's SVC stack while it is paged out */
-    char *ptr = static_DAAllocPtr;
-    static uint32_t page_block[3];
-    do
+    if (!static_EmergencyStacks)
     {
-      ptr += STACK_SIZE*1024;
-      if (ptr == static_LastStackBeforeEnd) ptr = static_DA;
-      if (ptr == static_LastStackBeforeMB) ptr = static_RoutineSVCStack + PAGE_SIZE*1024;
-      if (ptr == static_LastStackBeforeEnd) ptr = static_DA;
-      if (ptr == static_DAAllocPtr)
+      e = RebalanceEmergencyList();
+      if (!static_EmergencyStacks) /* Only fail if we still have 0 stacks - in which case RebalanceEmergenctList() will have returned an error */
       {
-        /* We've run out of space */
         if (!irqs_were_disabled) _kernel_irqs_on();
-        return mess_MakeError(ErrorNumber_RTSupport_Exhausted, 0);
+        return e;
       }
-      page_block[1] = (uint32_t) ptr;
     }
-    while (!_swix(OS_Memory, _INR(0,2), (1<<13) | (1<<9), page_block, 1));
-    e = _swix(OS_DynamicArea, _INR(0,3), 9, static_DANumber, ptr, STACK_SIZE*1024); /* page in it */
-    if (e)
+    /* Grab an emergency stack, then rebalance the list
+       Keeps all the allocation code in one place! */
+    svcstack *stack = static_EmergencyStacks;
+    static_EmergencyStacks = stack->next;
+    static_NumEmergency--;
+    char *ptr = stack->ptr;
+    stack->next = static_ActiveStacks;
+    static_ActiveStacks = stack;
+    RebalanceEmergencyList();
+    static_DAAllocPtr = ptr;
+
+    thread_t *new_thread = malloc(sizeof *new_thread);
+    bool thread_table_realloc_failed = false;
+    if (new_thread != 0 && ThreadTableSize == NThreads)
+    {
+      size_t new_size = NThreads + 1;
+      thread_t **new_table = realloc((void *) ThreadTable, new_size * sizeof *new_table);
+      if (new_table == 0) thread_table_realloc_failed = true;
+      else
+      {
+        ThreadTable = new_table;
+        ThreadTableSize = new_size;
+      }
+    }
+    if (new_thread == 0 || thread_table_realloc_failed)
     {
       if (!irqs_were_disabled) _kernel_irqs_on();
+      free(new_thread);
+      e = mess_MakeError(ErrorNumber_RTSupport_AllocFailed, 0);
     }
     else
     {
-      static_DAAllocPtr = ptr;
-
-      thread_t *new_thread = malloc(sizeof *new_thread);
-      bool thread_table_realloc_failed = false;
-      if (new_thread != 0 && ThreadTableSize == NThreads)
+      *new_thread = (thread_t) {
+        .r0 = r0,
+        .r12 = r12,
+        .svc_stack_base = static_RoutineSVCStack,
+        .svc_stack_copy = ptr + STACK_SIZE*1024,
+        .default_entry = entry,
+        .default_pollword = pollword,
+        .priority = priority,
+        .entry = entry,
+        .psr = 0x1F, /* SYS mode, IRQs/FIQs enabled */
+        .pollword = pollword,
+        .r13_svc = (uint32_t) static_RoutineSVCStack,
+        .r10 = r10,
+        .r13_sys = r13sys,
+      };
+      ThreadTable[NThreads++] = new_thread;
+      switch (PriorityTable[priority].usage)
       {
-        size_t new_size = NThreads + 1;
-        thread_t **new_table = realloc((void *) ThreadTable, new_size * sizeof *new_table);
-        if (new_table == 0) thread_table_realloc_failed = true;
-        else
-        {
-          ThreadTable = new_table;
-          ThreadTableSize = new_size;
-        }
+        case 255: /* saturated */ break;
+        case 0:
+          PriorityTable[priority].last_executed = NThreads - 2; /* start here */
+          if (priority != 255)
+          {
+            uint32_t prev_priority = 255;
+            uint32_t next_priority;
+            while ((next_priority = PriorityTable[prev_priority].next) > priority)
+              prev_priority = next_priority;
+            PriorityTable[priority].next = next_priority;
+            PriorityTable[prev_priority].next = priority;
+          }
+          /* drop through... */
+        default:
+          PriorityTable[priority].usage++;
+          break;
       }
-      if (new_thread == 0 || thread_table_realloc_failed)
+      if (*pollword && priority > ThreadTable[Context]->priority)
       {
-        if (!irqs_were_disabled) _kernel_irqs_on();
-        free(new_thread);
-        e = mess_MakeError(ErrorNumber_RTSupport_AllocFailed, 0);
+        /* It needs to pre-empt us already! */
+        static const uint32_t set_pollword = -1;
+        Yield(false, &set_pollword, 0);
       }
-      else
-      {
-        *new_thread = (thread_t) {
-          .r0 = r0,
-          .r12 = r12,
-          .svc_stack_base = static_RoutineSVCStack,
-          .svc_stack_copy = ptr + STACK_SIZE*1024,
-          .default_entry = entry,
-          .default_pollword = pollword,
-          .priority = priority,
-          .entry = entry,
-          .psr = 0x1F, /* SYS mode, IRQs/FIQs enabled */
-          .pollword = pollword,
-          .r13_svc = (uint32_t) static_RoutineSVCStack,
-          .r10 = r10,
-          .r13_sys = r13sys,
-        };
-        ThreadTable[NThreads++] = new_thread;
-        switch (PriorityTable[priority].usage)
-        {
-          case 255: /* saturated */ break;
-          case 0:
-            PriorityTable[priority].last_executed = NThreads - 2; /* start here */
-            if (priority != 255)
-            {
-              uint32_t prev_priority = 255;
-              uint32_t next_priority;
-              while ((next_priority = PriorityTable[prev_priority].next) > priority)
-                prev_priority = next_priority;
-              PriorityTable[priority].next = next_priority;
-              PriorityTable[prev_priority].next = priority;
-            }
-            /* drop through... */
-          default:
-            PriorityTable[priority].usage++;
-            break;
-        }
-        if (*pollword && priority > ThreadTable[Context]->priority)
-        {
-          /* It needs to pre-empt us already! */
-          static const uint32_t set_pollword = -1;
-          Yield(false, &set_pollword, 0);
-        }
-        if (!irqs_were_disabled) _kernel_irqs_on();
-        *r_handle = new_thread;
-      }
+      if (!irqs_were_disabled) _kernel_irqs_on();
+      *r_handle = new_thread;
     }
   }
   return e;
@@ -649,7 +688,14 @@ static _kernel_oserror *Deregister(uint32_t flags, thread_t *handle)
   {
     thread_t *thread = ThreadTable[index];
     /* Release the memory for the SVC stack copy */
-    _swix(OS_DynamicArea, _INR(0,3), 10, static_DANumber, thread->svc_stack_copy - STACK_SIZE*1024, STACK_SIZE*1024);
+    /* We push it onto the emergency list, then let RebalanceEmergencyList handle the rest */
+    svcstack *stack = static_ActiveStacks;
+    static_ActiveStacks = stack->next;
+    stack->next = static_EmergencyStacks;
+    stack->ptr = ((char *) thread->svc_stack_copy)-STACK_SIZE*1024;
+    static_EmergencyStacks = stack;
+    static_NumEmergency++;
+    RebalanceEmergencyList();
     /* If it was pre-empted, patch up the IRQ stack so no attempt is made to resume it */
     bool stack_frame_needs_poking = false;
     volatile uint32_t * volatile stack_frame;
@@ -880,6 +926,60 @@ static _kernel_oserror *ReadInfo(uint32_t reason, uint32_t *r_value)
   return e;
 }
 
+/*****************************************************************************
+* RebalanceEmergencyList
+*
+* Tries to make sure we have exactly EMERGENCY_STACKS in the emergency list
+*
+* Assumptions
+*  Assumes function will not be re-entered
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NULL if successful; otherwise pointer to error block
+*****************************************************************************/
+static _kernel_oserror *RebalanceEmergencyList(void)
+{
+  _kernel_oserror *e = NULL;
+  svcstack *stack;
+  if(!static_UseSparseArea)
+  {
+    /* Not much to do if we're not using a sparse area */
+    if(!static_EmergencyStacks)
+      return mess_MakeError(ErrorNumber_RTSupport_Exhausted, 0);
+    return NULL;
+  }
+  while (static_NumEmergency < EMERGENCY_STACKS)
+  {
+    stack = static_FreeStacks;
+    if(!stack)
+      return mess_MakeError(ErrorNumber_RTSupport_Exhausted, 0);
+    e = _swix(OS_DynamicArea,_INR(0,3),9,static_DANumber,stack->ptr,STACK_SIZE*1024);
+    if(e)
+      return e; /* Assume that if one alloc fails, all subsequent ones will fail */
+    static_FreeStacks = stack->next;
+    stack->next = static_EmergencyStacks;
+    static_EmergencyStacks = stack;
+    static_NumEmergency++;
+  }
+  while (static_NumEmergency > EMERGENCY_STACKS)
+  {
+    stack = static_EmergencyStacks;
+    e = _swix(OS_DynamicArea,_INR(0,3),10,static_DANumber,stack->ptr,STACK_SIZE*1024);
+    if(e)
+      return NULL; /* Assume that an error means that no memory was moved. Also, the caller doesn't care about errors when freeing memory, so just return NULL */
+    static_EmergencyStacks = stack->next;
+    stack->next = static_FreeStacks;
+    static_FreeStacks = stack;
+    static_NumEmergency--;
+  }
+  return NULL;
+}
 
 /*****************************************************************************
 * END OF FILE

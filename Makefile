@@ -27,7 +27,8 @@ HEADER1     = ${TARGET}
 ASMCHEADER1 = ${TARGET}
 CMHGCHEADER = modhdr
 CMHGCHEADER_SWIPREFIX = RT
-CFLAGS      = -ffah -We
+# CFLAGS (hopefully temporarily) forced to -cpu 3 to fix internal compiler error due to __packed
+CFLAGS      = -ffah -We -cpu 3
 ASFLAGS     = -cpu 4
 CDEFINES    =
 CINCLUDES   =
