@@ -103,6 +103,7 @@ extern volatile bool InBackground;
 extern volatile uint32_t NTicks;
 extern volatile void *LastKnownIRQsema;
 extern volatile uint32_t Priority;
+extern void **IRQsema;
 extern void *IRQStk;
 extern const void * const volatile VectorClaimAddress;
 extern priority_t PriorityTable[256];
@@ -112,8 +113,6 @@ extern _kernel_oserror ErrorBlock_PollwordInUse;
 /*****************************************************************************
 * Function prototypes
 *****************************************************************************/
-
-extern void *ThreadResumed(void);
 
 /* The following have to be declared as data although they are really code */
 /* in order to persuade the compiler to relocate them. They could arguably */
@@ -135,6 +134,7 @@ extern uint32_t MyUnthreadV[];
 extern uint32_t SomethingsGoneWrong[];
 #define SomethingsGoneWrong (*(void (*)(void)) SomethingsGoneWrong)
 /* extern void SomethingsGoneWrong(void); */
+extern uint32_t ThreadResumed[];
 
 
 #endif  /* end of sentry #ifdef */

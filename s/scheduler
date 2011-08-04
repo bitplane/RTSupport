@@ -41,7 +41,7 @@ OverloadThreshold SETA 50 ; centiseconds after which to only wake pre-empted thr
         GET     Hdr:APCS.<APCS>
         GET     Hdr:FSNumbers ; for NewErrors
         GET     Hdr:NewErrors
-        GET     Hdr:PublicWS
+;        GET     Hdr:PublicWS
         GET     Hdr:UpCall
         GET     Hdr:RTSupport
 
@@ -97,65 +97,6 @@ PrioritySize            *       :INDEX: @
 
         AREA    |RO$$Code|, CODE, READONLY
 
-PreEmptionRecovery
-        ; Enter in SVC mode with interrupts disabled (needs to set up both r14_svc and r14_sys)
-        ; with r13_svc and r13_sys already set up and r10 pointing to end of RecoveryRegs
-
-        ; Restore environment stored in the thread structure
-        MOV     r0, r13_svc, LSR #20
-        LDMDB   r10, {r1-r7, r14}^ ; get reserved stack words and r14_sys
-        MOV     r0, r0, LSL #20
-        SUB     r10, r10, #8*4
-        STMIA   r0, {r1-r7}        ; set up reserved stack words at base of SVC stack
-        LDMDB   r10, {r0, r4-r10, r14_svc} ; load thread r4-r10,r14_svc; point r0 at stack frame
-        ASSERT  Thread_StackFrame = Thread_RecoveryRegs - 4
-
-        ; Get registers from IRQ stack, and patch up IRQ stack to say we've resumed
-        MSR     CPSR_c, #I32_bit :OR: IRQ32_mode  ; we need a spare register to do the following
-        LDR     r1, [r0, #ISF_CPSR]!              ; pull interrupted CPSR from IRQ frame
-        MSR     SPSR_cxsf, r1                     ; save in SPSR for now
-        LDR     r14_irq, [r0, #ISF_PC - ISF_CPSR] ; pull interrupted PC from IRQ frame
-        MOV     r1, #I32_bit :OR: IRQ32_mode
-        STR     r1, [r0, #ISF_CPSR - ISF_CPSR]
-        ADR     r1, ThreadResumed                 ; also used below
-        STR     r1, [r0, #ISF_PC - ISF_CPSR]      ; mark IRQ frame as resumed
-
-        ; Strip as many redundant stack frames from the top of the IRQ stack as possible
-        ; to free up space and deal with routines being resumed out-of-order.
-        MOV     r12, #0
-        LDR     r2, [r12, #IRQsema]
-        B       %FT02
-01      ADD     r13_irq, r2, #ISFSize
-        LDR     r2, [r2, #ISF_IRQsema]
-        TEQ     r2, #0
-        BEQ     %FT03
-02      LDR     r11, [r2, #ISF_PC]
-        TEQ     r11, r1
-        BEQ     %B01
-03      STR     r2, [r12, #IRQsema]
-
-        ; Jump back into interrupted code
-        LDMDB   r0, {r1-r3, r11, r12}
-        LDR     r0, [r0, #ISF_R0 - ISF_CPSR]
-        MOVS    pc, r14_irq
-
-        EXPORT  ThreadResumed
-ThreadResumed
-        ; Used to reserve a unique PC address to poke into IRQ stack frames that were
-        ; pre-empted and have now been resumed, to prevent stack-inspecting routines like
-        ; OS_Heap from getting confused if an earlier-preempted routine is resumed before
-        ; one that was pre-empted later. Shouldn't normally be executed, but just in case
-        ; simply pull the next stack frame off the IRQ stack.
-
-        ; Enter in IRQ mode with interrupts disabled.
-        MOV     r11, #0
-        LDR     r13, [r11, #IRQsema]
-        Pull    "r0"
-        STR     r0, [r11, #IRQsema]
-        Pull    "r1-r3, r11, r12, lr"
-        MSR     SPSR_cxsf, lr
-        Pull    "r0, pc",, ^
-
         ; Some permanently fixed pollwords for special purposes
         EXPORT  Pollword_PreEmpted
 Pollword_PreEmpted
@@ -205,6 +146,9 @@ OriginalR9
         EXPORT  IRQStk
 IRQStk
         DCD     0       ; holds base of IRQ stack
+        EXPORT  IRQsema
+IRQsema
+        DCD     0       ; Pointer to kernel IRQsema val
 
         ; This code has dual purpose: to determine whether UnthreadV is being called on
         ; a given system, and to cache the real vector claim address for the use of the
@@ -292,8 +236,8 @@ Yield
 
         MSR     CPSR_c, #I32_bit :OR: SYS32_mode
 
-        MOV     r12, #0
-        LDR     r12, [r12, #IRQsema] ; don't dereference this twice in yield case
+        LDR     r12, IRQsema
+        LDR     r12, [r12] ; don't dereference this twice in yield case
         LDR     r14, LastKnownIRQsema
         CMP     r12, #1 ; C clear iff 0
         TEQ     r12, r14
@@ -333,8 +277,8 @@ Die
         ; Only return if in an interrupt routine or in the foreground and didn't know it
         MSR     CPSR_c, #I32_bit :OR: IRQ32_mode
 
-        MOV     r12, #0
-        LDR     r12, [r12, #IRQsema]
+        LDR     r12, IRQsema
+        LDR     r12, [r12]
         LDR     r3, LastKnownIRQsema
         CMP     r12, #1 ; C clear iff 0
         TEQ     r12, r3
@@ -361,8 +305,8 @@ OldKernelExitVeneer
         ; Undo the IRQ stack fiddling done on entry, remembering that the vector claim
         ; address has already been pulled off the stack. IRQs should be off.
         Pull    "r1-r2"
-        MOV     r0, #0
-        STR     r2, [r0, #IRQsema]
+        LDR     r0, IRQsema
+        STR     r2, [r0]
         Push    "r1"
         LDR     pc, VectorClaimAddress
 
@@ -371,10 +315,10 @@ MyUnthreadV_OldKernel
         ; Patch up the IRQ stack before continuing as for newer kernels
         ; (note that prioritisation won't work correctly on these kernels).
         ; In IRQ mode with IRQs disabled.
-        MOV     r0, #0
+        LDR     r0, IRQsema
         ADD     sp_irq, sp_irq, #4 ; we don't want the real vector claim address
-        LDR     r2, [r0, #IRQsema]
-        STR     sp_irq, [r0, #IRQsema]
+        LDR     r2, [r0]
+        STR     sp_irq, [r0]
         Pull    "r1"
         ADR     r0, OldKernelExitVeneer
         Push    "r0-r2"
@@ -387,8 +331,8 @@ MyUnthreadV
         ; r13_sys,r14_svc,r14_sys are all still in their original registers.
         ; This means that we cannot tolerate another threading system running concurrently, and
         ; if that is the case, there is no point in passing control along to the next claimant.
-        MOV     r12, #0
-        LDR     r12, [r12, #IRQsema]
+        LDR     r12, IRQsema
+        LDR     r12, [r12]
         LDR     r14, LastKnownIRQsema
         LDR     r12, [r12, #ISF_IRQsema]
         CMP     r12, #1 ; C clear iff 0
@@ -474,8 +418,9 @@ switch_to_thread ; r1-r3,r12 required
       ]
         STR     r2, Context
         STR     r3, Priority
+        LDR     r11, IRQsema
+        LDR     r14_irq, [r11]
         MOV     r11, #0
-        LDR     r14_irq, [r11, #IRQsema]
         STR     r14_irq, LastKnownIRQsema
         ; Pre-empt the current thread, if any
         CMP     r0, #-1
@@ -610,7 +555,8 @@ return_to_foreground
         ; Since this will be in a privileged mode, there is no need to exit via the
         ; IRQ dispatcher (no system callbacks would be triggered). This is just as well,
         ; since there are no stack frames on the IRQ stack to get its address from!
-        STR     r2, [r2, #IRQsema]
+        LDR     r1, IRQsema
+        STR     r2, [r1]
         STR     r2, LastKnownIRQsema
         MOV     r1, r12
         B       resume_thread
@@ -700,6 +646,65 @@ SomethingsGoneWrong
         MSR     CPSR_c, r9
         LDR     r9, OriginalR9
         MOV     pc, r14
+
+PreEmptionRecovery
+        ; Enter in SVC mode with interrupts disabled (needs to set up both r14_svc and r14_sys)
+        ; with r13_svc and r13_sys already set up and r10 pointing to end of RecoveryRegs
+
+        ; Restore environment stored in the thread structure
+        MOV     r0, r13_svc, LSR #20
+        LDMDB   r10, {r1-r7, r14}^ ; get reserved stack words and r14_sys
+        MOV     r0, r0, LSL #20
+        SUB     r10, r10, #8*4
+        STMIA   r0, {r1-r7}        ; set up reserved stack words at base of SVC stack
+        LDMDB   r10, {r0, r4-r10, r14_svc} ; load thread r4-r10,r14_svc; point r0 at stack frame
+        ASSERT  Thread_StackFrame = Thread_RecoveryRegs - 4
+
+        ; Get registers from IRQ stack, and patch up IRQ stack to say we've resumed
+        MSR     CPSR_c, #I32_bit :OR: IRQ32_mode  ; we need a spare register to do the following
+        LDR     r1, [r0, #ISF_CPSR]!              ; pull interrupted CPSR from IRQ frame
+        MSR     SPSR_cxsf, r1                     ; save in SPSR for now
+        LDR     r14_irq, [r0, #ISF_PC - ISF_CPSR] ; pull interrupted PC from IRQ frame
+        MOV     r1, #I32_bit :OR: IRQ32_mode
+        STR     r1, [r0, #ISF_CPSR - ISF_CPSR]
+        ADR     r1, ThreadResumed                 ; also used below
+        STR     r1, [r0, #ISF_PC - ISF_CPSR]      ; mark IRQ frame as resumed
+
+        ; Strip as many redundant stack frames from the top of the IRQ stack as possible
+        ; to free up space and deal with routines being resumed out-of-order.
+        LDR     r12, IRQsema
+        LDR     r2, [r12]
+        B       %FT02
+01      ADD     r13_irq, r2, #ISFSize
+        LDR     r2, [r2, #ISF_IRQsema]
+        TEQ     r2, #0
+        BEQ     %FT03
+02      LDR     r11, [r2, #ISF_PC]
+        TEQ     r11, r1
+        BEQ     %B01
+03      STR     r2, [r12]
+
+        ; Jump back into interrupted code
+        LDMDB   r0, {r1-r3, r11, r12}
+        LDR     r0, [r0, #ISF_R0 - ISF_CPSR]
+        MOVS    pc, r14_irq
+
+        EXPORT  ThreadResumed
+ThreadResumed
+        ; Used to reserve a unique PC address to poke into IRQ stack frames that were
+        ; pre-empted and have now been resumed, to prevent stack-inspecting routines like
+        ; OS_Heap from getting confused if an earlier-preempted routine is resumed before
+        ; one that was pre-empted later. Shouldn't normally be executed, but just in case
+        ; simply pull the next stack frame off the IRQ stack.
+
+        ; Enter in IRQ mode with interrupts disabled.
+        LDR     r11, IRQsema
+        LDR     r13, [r11]
+        Pull    "r0"
+        STR     r0, [r11]
+        Pull    "r1-r3, r11, r12, lr"
+        MSR     SPSR_cxsf, lr
+        Pull    "r0, pc",, ^
 
         EXPORT  PriorityTable
 PriorityTable

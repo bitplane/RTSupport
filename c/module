@@ -44,6 +44,7 @@
 #include "Global/NewErrors.h"
 #include "Global/RISCOS.h"
 #include "Global/Services.h"
+#include "Global/OSRSI6.h"
 #include "Interface/RTSupport.h"
 #include "DebugLib/DebugLib.h"
 
@@ -58,7 +59,7 @@
 /*****************************************************************************
 * Macros
 *****************************************************************************/
-#define IRQsema (*(void **)0x108)
+#define Legacy_IRQsema ((void **)0x108)
 
 
 /*****************************************************************************
@@ -227,6 +228,14 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   }
   if (!e)
   {
+    /* Find IRQsema */
+    if(_swix(OS_ReadSysInfo,_INR(0,2)|_OUT(2),6,0,OSRSI6_IRQsema,&IRQsema))
+      IRQsema = Legacy_IRQsema;
+    else if(!IRQsema)
+      IRQsema = Legacy_IRQsema;
+  }
+  if (!e)
+  {
     /* Check OS is calling UnthreadV, and cache the vector claim address in case we're */
     /* on a broken kernel */
     _swix(OS_Claim, _INR(0,2), UnthreadV, TestUnthreadV, 0);
@@ -321,7 +330,7 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   {
 
     /* Initialise workspace for scheduler */
-    e = _swix(OS_ReadSysInfo, _INR(0,2)|_OUT(2), 6, 0, 21, &IRQStk);
+    e = _swix(OS_ReadSysInfo, _INR(0,2)|_OUT(2), 6, 0, OSRSI6_Danger_IRQSTK, &IRQStk);
   }
   if (!e)
   {
@@ -705,11 +714,11 @@ static _kernel_oserror *Deregister(uint32_t flags, thread_t *handle)
       stack_frame_needs_poking = true;
       stack_frame = thread->stack_frame;
     }
-    else if (index == Context && IRQsema != LastKnownIRQsema)
+    else if (index == Context && *IRQsema != LastKnownIRQsema)
     {
       /* Thread was only preempted by an IRQ (so this SWI is being called from that IRQ or a nested one) */
       /* We have to find the stack frame manually, because it didn't exist while the thread was executing */
-      stack_frame = IRQsema;
+      stack_frame = *IRQsema;
       while ((volatile uint32_t *) *stack_frame != LastKnownIRQsema && /* shouldn't happen, except perhaps after abort */ *stack_frame != 0)
         stack_frame = (volatile uint32_t *) *stack_frame;
       if (*stack_frame != NULL)
@@ -894,7 +903,7 @@ static _kernel_oserror *ReadInfo(uint32_t reason, uint32_t *r_value)
   {
     case RTReadInfo_Handle:
     {
-      if (IRQsema != LastKnownIRQsema)
+      if (*IRQsema != LastKnownIRQsema)
         *r_value = -1;
       else if (Context == 0)
         *r_value = 0;
@@ -909,7 +918,7 @@ static _kernel_oserror *ReadInfo(uint32_t reason, uint32_t *r_value)
     }
 
     case RTReadInfo_Priority:
-      if (IRQsema != LastKnownIRQsema)
+      if (*IRQsema != LastKnownIRQsema)
         *r_value = -1;
       else
         *r_value = Priority;
