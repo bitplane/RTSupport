@@ -54,6 +54,7 @@ RTReadInfo_SVCStk       #       1
  AddError RTSupport_Exhausted,     "Too many RTSupport routines"
  AddError RTSupport_BadHandle,     "Illegal routine handle"
  AddError RTSupport_UKReason,      "Unknown reason code in RTSupport"
+ AddError RTSupport_UKFlags,       "Unknown SWI flags in RTSupport"
 
 	OPT	OldOpt
 	END

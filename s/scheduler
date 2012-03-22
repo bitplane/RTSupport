@@ -41,17 +41,16 @@ OverloadThreshold SETA 50 ; centiseconds after which to only wake pre-empted thr
         GET     Hdr:APCS.<APCS>
         GET     Hdr:FSNumbers ; for NewErrors
         GET     Hdr:NewErrors
-;        GET     Hdr:PublicWS
         GET     Hdr:UpCall
         GET     Hdr:RTSupport
+        GET     Hdr:CPU.Arch
 
-        GET     Hdr:NdrDebug
         GET     Hdr:Proc
-debug           SETL    false
-debug_irqsafe   SETL    true
-dadebug_module  SETL    true
-                GBLL    debugtemp
-debugtemp       SETL    true
+
+        [ :LNOT: :DEF: DEBUGLIB
+        GBLL    DEBUGLIB
+DEBUGLIB SETL   {FALSE}
+        ]
 
         ; IRQ stack frame layout
                         ^       0
@@ -84,7 +83,7 @@ Thread_R13SVC           #       4
 Thread_R10              #       4
 Thread_R13SYS           #       4
 Thread_StackFrame       #       4 ; must be adjacent to Thread_RecoveryRegs
-Thread_RecoveryRegs     #       8*4 + 7*4 + 1*4
+Thread_RecoveryRegs     #       7*4 + 1*4 + 7*4 + 1*4
                                 ; (ie r4-r10 + r14_svc + 7 stack reserved words + r14_sys)
 ThreadSize              *       :INDEX: @
 
@@ -115,40 +114,85 @@ Pollword_CollateralDamage
 
         AREA    |RW$$Code|, CODE ; not READONLY
 
-        ; Static workspace (accessed PC-relative by scheduler)
 
-        EXPORT  ThreadTable
-ThreadTable
-        DCD     0       ; address of table of pointers to per-thread structures
-        EXPORT  ThreadTableSize
-ThreadTableSize
-        DCD     1       ; size of RMA block in words
-        EXPORT  NThreads
-NThreads
-        DCD     1       ; number of threads in table (including the foreground)
-        EXPORT  Context
-Context
-        DCD     0       ; 0 = foreground, -1 used when nothing pertinent
-        EXPORT  InBackground
-InBackground
-        DCD     0       ; nonzero if we're monitoring UpCall 6 and Service_Error
-        EXPORT  NTicks
-NTicks
-        DCD     0       ; centiseconds since we were entered (for saturation recovery)
-        EXPORT  LastKnownIRQsema
-LastKnownIRQsema
-        DCD     0       ; for distinguishing nested IRQs from interrupted real-time routines
-        EXPORT  Priority
-Priority
-        DCD     0       ; used as a working variable round the outer dispatch loop
-OriginalR9
-        DCD     0       ; frees up a register for use during thread test
-        EXPORT  IRQStk
-IRQStk
-        DCD     0       ; holds base of IRQ stack
-        EXPORT  IRQsema
-IRQsema
-        DCD     0       ; Pointer to kernel IRQsema val
+; Debug code
+
+ [ DEBUGLIB
+WriteS  ROUT
+        ; r1 = DADWriteC
+        ; lr = string ptr
+        ; r0, r3 trashable
+        MOV     r3, lr
+01
+        LDRB    r0, [r3], #1
+        CMP     r0, #0
+        ADR     lr, %BT01
+        MOVNE   pc, r1
+        ADD     r3, r3, #3
+        BIC     pc, r3, #3
+
+WriteHex ROUT
+        ; r1 = DADWriteC
+        ; r4 = value
+        ; r0, r3, r5-r6 trashable
+        ADR     r3, %FT02
+        MOV     r5, #8
+        MOV     r6, lr
+01
+        LDRB    r0, [r3, r4, LSR #28]
+        SUBS    r5, r5, #1
+        MOV     r4, r4, LSL #4
+        ADR     lr, %BT01
+        MOVGE   pc, r1
+        MOV     r0, #10
+        MOV     lr, r6
+        MOV     pc, r1
+02
+        = "0123456789abcdef"
+ ]
+
+        MACRO
+        Debug   $str
+ [ DEBUGLIB
+        Push    "r0-r3,r14"
+        LDR     r1, asm_DADWriteC
+        MRS     r2, CPSR
+        CMP     r1, #0
+        BEQ     %FT01
+        BL      WriteS
+        =       "$str", 10, 0
+        ALIGN
+01
+        MSR     CPSR_f, r2
+        Pull    "r0-r3,r14"
+ ]
+        MEND
+
+        MACRO
+        DebugReg $reg,$str
+ [ DEBUGLIB
+        Push    "r0-r6,r14"
+     [ "$reg" = "r13"
+        ADD     r4, r13, #8*4
+     |
+      [ "$reg" <> "r4"
+        MOV     r4, $reg
+      ]
+     ]
+        LDR     r1, asm_DADWriteC
+        MRS     r2, CPSR
+        CMP     r1, #0
+        BEQ     %FT01
+     [ "$str" <> ""
+        BL      WriteS
+        =       "$str", 0
+     ]
+        BL      WriteHex
+01
+        MSR     CPSR_f, r2
+        Pull    "r0-r6,r14"
+ ]
+        MEND
 
         ; This code has dual purpose: to determine whether UnthreadV is being called on
         ; a given system, and to cache the real vector claim address for the use of the
@@ -159,11 +203,6 @@ VectorClaimAddress
         DCD     0
         EXPORT  TestUnthreadV
 TestUnthreadV
-      [ debug
-        MSR     CPSR_c, #I32_bit :OR: SVC32_mode
-        Debug_Open
-        MSR     CPSR_c, #I32_bit :OR: IRQ32_mode
-      ]
         Pull    "lr"
         STR     lr, VectorClaimAddress
         MOV     pc, lr
@@ -225,6 +264,10 @@ Yield
         ; Return false for success (only true if in interrupt context)
         ; APCS calling convention
         FunctionEntry "r4-r9,r11"
+        Debug   "Yield"
+        DebugReg r0, "timeout flag="
+        DebugReg r1, "pollword="
+        DebugReg r2, "timeout="
         SUB     r13_svc, r13_svc, #4
         STMIA   r13_svc, {r14_usr}^
 
@@ -238,6 +281,13 @@ Yield
 
         LDR     r12, IRQsema
         LDR     r12, [r12] ; don't dereference this twice in yield case
+      [ DEBUGLIB
+        MSR     CPSR_c, #I32_bit :OR: SVC32_mode
+        DebugReg r12, "*IRQsema="
+        LDR     r4, LastKnownIRQsema
+        DebugReg r4, "LastKnownIRQsema="
+        MSR     CPSR_c, #I32_bit :OR: SYS32_mode
+      ]
         LDR     r14, LastKnownIRQsema
         CMP     r12, #1 ; C clear iff 0
         TEQ     r12, r14
@@ -250,6 +300,11 @@ Yield
         TEQ     r0, #0
         MOV     r0, #RTExit_Rescan :OR: RTExit_PollwordGiven :OR: RTExit_EntryGiven
         ORRNE   r0, r0, #RTExit_TimeLimitGiven
+      [ DEBUGLIB
+        MSR     CPSR_c, #I32_bit :OR: SVC32_mode
+        Debug   "Yielding"
+        MSR     CPSR_c, #I32_bit :OR: SYS32_mode
+      ]
         BL      Yielded
 
         MSR     CPSR_c, #I32_bit :OR: SVC32_mode
@@ -265,6 +320,7 @@ Yield
         Return  "r4-r9,r11"
 99
         MSR     CPSR_c, r11
+        Debug   "Can't yield, in IRQ"
         ADD     r13_svc, r13_svc, #8*4 + 1*4
         MOV     r0, #1
         Return  "r4-r9,r11"
@@ -283,6 +339,10 @@ Die
         CMP     r12, #1 ; C clear iff 0
         TEQ     r12, r3
         LDR     r2, Context
+        Debug   "Die"
+        DebugReg r2, "Context="
+        DebugReg r12, "*IRQsema="
+        DebugReg r3, "LastKnownIRQsema="
         MOV     r12, #-1
         STR     r12, Context
         BHI     %F99 ; must be in interrupt context
@@ -293,11 +353,14 @@ Die
         MOV     r10, r2
         LDR     r11, NThreads
         LDR     r14_irq, =Pollword_PreEmpted
+        Debug   "Die OK"
         B       next_thread_no_check
 98
+        Debug   "Die - SomethingsGoneWrong"
         BL      SomethingsGoneWrong
         ; drop through...
 99
+        Debug   "Die - Failed, in IRQ?"
         MSR     CPSR_c, #I32_bit :OR: SVC32_mode
         Return  , LinkNotStacked
 
@@ -339,6 +402,7 @@ MyUnthreadV
         TEQ     r12, r14 ; Z set iff equal
         Pull    "pc", HI ; must be a nested interrupt - return from vector immediately
         BLNE    SomethingsGoneWrong
+        Debug   "MyUnthreadV"
         STR     r9, OriginalR9
         MOVCC   r9, #0
         STRCC   r9, NTicks ; zero the elapsed time counter
@@ -348,7 +412,7 @@ full_rescan ; r9 required
         LDR     r11, NThreads
         LDR     r12, ThreadTable
         LDR     r14_irq, =Pollword_PreEmpted
-        ADR     r0, PriorityTable
+        ADRL    r0, PriorityTable
         LDRB    r2, [r0, #PrioritySize * 255 + Priority_Usage]
         TEQ     r2, #0
         LDREQB  r3, [r0, #PrioritySize * 255 + Priority_Next]
@@ -371,7 +435,11 @@ next_priority ; r0,r3,r9,r11-r12,r14 required
         B       switch_to_thread
 next_thread ; r2-r3,r9-r12,r14 required
         TEQ     r2, r10
+      [ DEBUGLIB
+        ADREQL  r0, PriorityTable
+      |
         ADREQ   r0, PriorityTable
+      ]
         ASSERT  Priority_Next = 0
         LDREQB  r3, [r0, r3, LSL #2]
         BEQ     next_priority
@@ -395,11 +463,17 @@ next_thread_no_check ; r2-r3,r9-r12,r14 required
 switch_to_thread ; r1-r3,r12 required
         ; We've found a thread that needs to be executed
         ; Get on UpCallV if necessary
+        ; Must be in IRQ mode
         LDR     r0, InBackground
+        Debug   "switch_to_thread"
+        DebugReg r1,"thread="
+        DebugReg r2,"idx="
+        DebugReg r0,"InBackground="
         TEQ     r0, #0
         BLEQ    GetOnUpCallV
         ; Is it the same thread we are interrupting?
         LDR     r0, Context
+        DebugReg r0,"Context="
         CMP     r0, r2
         LDREQ   r9, OriginalR9
         Pull    "pc", EQ ; can't happen if this was a yield operation, so OK to exit this way
@@ -407,9 +481,8 @@ switch_to_thread ; r1-r3,r12 required
         ; static storage
         ASSERT  PrioritySize = 4
         MOV     r10, r3, LSL #2
-        ADR     r9, PriorityTable
-        ADD     r9, r9, #Priority_LastExecuted
-      [ 1=0 ; might be running on a SA Risc PC (?)
+        ADRL    r9, PriorityTable+Priority_LastExecuted
+      [ :LNOT: NoARMv4
         STRH    r2, [r9, r10]
       |
         STRB    r2, [r9, r10]!
@@ -430,6 +503,8 @@ resume_thread
         MSR     CPSR_c, #I32_bit :OR: SYS32_mode
         ADR     r14_usr, Yielded
         MSR     CPSR_c, #I32_bit :OR: SVC32_mode
+        Debug   "resume_thread"
+        DebugReg r1, "thread="
         ASSERT  Thread_R0 = 0
         ASSERT  Thread_R12 = 4
         ASSERT  Thread_SVCStackBase = 8
@@ -449,8 +524,8 @@ resume_thread
         NOP     ; grr
         LDR     r13_svc, [r1], #Thread_Entry - Thread_R13SVC
         CMP     r3, r13_svc
-01      LDMHIFD r4!, {r2,r5-r9,r11,r14_svc}
-        STMHIFD r3!, {r2,r5-r9,r11,r14_svc}
+01      LDMHIDB r4!, {r2,r5-r9,r11,r14_svc}
+        STMHIDB r3!, {r2,r5-r9,r11,r14_svc}
         CMP     r3, r13_svc
         BHI     %B01
         ASSERT  Thread_PSR = Thread_Entry + 4
@@ -463,10 +538,17 @@ Yielded
         ORR     r9, r9, #SYS32_mode ; force next re-entry to be in system mode
         MSR     CPSR_c, #I32_bit :OR: SYS32_mode ; IRQs off before we access volatiles
         LDR     r12, ThreadTable
-        LDR     r2, Context
+        LDR     r3, Context
+      [ DEBUGLIB
+        MSR     CPSR_c, #I32_bit :OR: SVC32_mode
+        Debug   "Yielded"
+        DebugReg r3, "Context="
+        DebugReg r0, "flags="
+        MSR     CPSR_c, #I32_bit :OR: SYS32_mode
+      ]
         MOV     r11, #-1
         STR     r11, Context
-        LDR     r11, [r12, r2, LSL #2]
+        LDR     r11, [r12, r3, LSL #2]
         TST     r0, #RTExit_EntryGiven
         MOVNE   r8, r14_usr
         LDREQ   r8, [r11, #Thread_DefaultEntry]
@@ -489,25 +571,70 @@ Yielded
         STMIA   r11, {r10,r13_usr}^
         ADD     r1, r11, #Thread_SVCStackBase - Thread_R10
         ASSERT  Thread_SVCStackCopy = Thread_SVCStackBase + 4
-        LDMIA   r1, {r3-r4}
-        CMP     r3, r13_svc
-01      LDMHIFD r3!, {r5-r11,r14_svc}
-        STMHIFD r4!, {r5-r11,r14_svc}
-        CMP     r3, r13_svc
+        LDMIA   r1, {r2,r4}
+        CMP     r2, r13_svc
+01      LDMHIDB r2!, {r5-r11,r14_svc}
+        STMHIDB r4!, {r5-r11,r14_svc}
+        CMP     r2, r13_svc
         BHI     %B01
 
         MSR     CPSR_c, #I32_bit :OR: IRQ32_mode
         LDR     r9, NTicks
         TST     r0, #RTExit_Rescan
         BNE     full_rescan
+        MOV     r2, r3
         LDR     r3, Priority
         MOV     r10, r2
         LDR     r11, NThreads
         LDR     r14_irq, =Pollword_PreEmpted
         B       next_thread_no_check
 
+        ; Static workspace (accessed PC-relative by scheduler)
+
+        EXPORT  ThreadTable
+ThreadTable
+        DCD     0       ; address of table of pointers to per-thread structures
+        EXPORT  ThreadTableSize
+ThreadTableSize
+        DCD     1       ; size of RMA block in words
+        EXPORT  NThreads
+NThreads
+        DCD     1       ; number of threads in table (including the foreground)
+        EXPORT  Context
+Context
+        DCD     0       ; 0 = foreground, -1 used when nothing pertinent
+        EXPORT  InBackground
+InBackground
+        DCD     0       ; nonzero if we're monitoring UpCall 6 and Service_Error
+        EXPORT  NTicks
+NTicks
+        DCD     0       ; centiseconds since we were entered (for saturation recovery)
+        EXPORT  LastKnownIRQsema
+LastKnownIRQsema
+        DCD     0       ; for distinguishing nested IRQs from interrupted real-time routines
+        EXPORT  Priority
+Priority
+        DCD     0       ; used as a working variable round the outer dispatch loop
+OriginalR9
+        DCD     0       ; frees up a register for use during thread test
+        EXPORT  IRQStk
+IRQStk
+        DCD     0       ; holds base of IRQ stack
+        EXPORT  IRQsema
+IRQsema
+        DCD     0       ; Pointer to kernel IRQsema val
+ [ DEBUGLIB
+        EXPORT  asm_DADWriteC
+asm_DADWriteC
+        DCD     0       ; DADebug_WriteC ptr
+
+        LTORG
+ ]
+
 return_to_foreground
         LDR     r11, Context
+        Debug   "return_to_foreground"
+        DebugReg r11,"Context="
         CMP     r11, #0 ; it may be that no ready threads were found, so we can exit quickly
         LDREQ   r9, OriginalR9
         Pull    "pc", EQ ; can't happen if this was a yield operation, so OK to exit this way
@@ -517,7 +644,11 @@ return_to_foreground
         MOV     r2, #0
         STR     r2, InBackground
         MOV     r0, #UpCallV
+      [ DEBUGLIB
+        ADRL    r1, MyUpCallV
+      |
         ADR     r1, MyUpCallV
+      ]
         SWI     XOS_Release ; nobody cares if r14_svc is corrupted here!
         STR     r2, Context
         STR     r2, Priority ; foreground should always specify a full rescan, but just in case
@@ -545,7 +676,7 @@ return_to_foreground
         NOP     ; grr
         ASSERT  Thread_RecoveryRegs = Thread_StackFrame + 4
         LDMIB   r12, {r4-r10,r14_svc}
-        ADD     r12, r12, #1*4 + 8*4 + 7*4
+        ADD     r12, r12, #1*4 + 7*4 + 1*4 + 7*4
         LDMIA   r12, {r14_usr}^
         MSR     CPSR_c, #I32_bit :OR: IRQ32_mode
         STR     r10, [r13_irq, #4]
@@ -569,9 +700,31 @@ PreEmpt
         ; r12 = ThreadTable
         ; OriginalR9 and IRQ stack hold routine's R9,R10 respectively
         ; on exit only r1 need be preserved
+        ; Must be in IRQ mode
         LDR     r0, [r12, r0, LSL #2]
-        ADD     r2, sp_irq, #4*2
+        ADD     r2, sp_irq, #4*2 ; skip vector return address, routine R10
         MSR     CPSR_c, #I32_bit :OR: SVC32_mode
+
+      [ DEBUGLIB
+        Debug   "PreEmpt"
+        DebugReg r0, "old="
+        DebugReg r1, "new="
+        DebugReg r2, "frame="
+        Debug   "Regs:"
+        LDR     r3, [r2, #ISF_R0]
+        DebugReg r3
+        LDR     r3, [r2, #ISF_R1]
+        DebugReg r3
+        LDR     r3, [r2, #ISF_R2]
+        DebugReg r3
+        LDR     r3, [r2, #ISF_R3]
+        DebugReg r3
+        DebugReg r4
+        DebugReg r5
+        DebugReg r6
+        DebugReg r7
+        DebugReg r8
+      ]
 
         LDR     r3, =PreEmptionRecovery
         MOV     r9, #I32_bit :OR: SVC32_mode
@@ -590,20 +743,39 @@ PreEmpt
         STMIA   r0, {r10,r13_usr}^
         ADD     r0, r0, #Thread_StackFrame - Thread_R10
         LDR     r9, OriginalR9
-        LDR     r10, [r2, #-4]
+        LDR     r10, [r2, #-4] ; Get routine R10
+      [ DEBUGLIB
+        DebugReg r9
+        DebugReg r10
+        LDR     r3, [r2, #ISF_R11]
+        DebugReg r3
+        LDR     r3, [r2, #ISF_R12]
+        DebugReg r3
+        DebugReg r13, "r13_svc="
+        DebugReg r14, "r14_svc="
+        LDR     r3, [r2, #ISF_PC]
+        DebugReg r3, "pc="
+        LDR     r3, [r2, #ISF_CPSR]
+        DebugReg r3, "CPSR="
+        LDR     r3, [r0, #Thread_R13SYS-Thread_StackFrame]
+        DebugReg r3, "r13_sys="
+      ]
         MOV     r3, r13_svc, LSR #20
-        ASSERT  Thread_StackFrame = Thread_Entry + 32
-        ASSERT  Thread_RecoveryRegs = Thread_Entry + 36
+        ASSERT  Thread_RecoveryRegs = Thread_StackFrame + 4
         STMIA   r0!, {r2,r4-r10,r14_svc}
         MOV     r3, r3, LSL #20
         LDMIA   r3, {r4-r10}
         STMIA   r0, {r4-r10,r14_usr}^
-        ADD     r0, r0, #Thread_SVCStackBase - ThreadSize
+      [ DEBUGLIB
+        LDR     r3, [r0, #7*4]
+        DebugReg r3, "r14_sys="
+      ]
+        ADD     r0, r0, #Thread_SVCStackBase - (Thread_RecoveryRegs + 8*4)
         ASSERT  Thread_SVCStackCopy = Thread_SVCStackBase + 4
         LDMIA   r0, {r0,r12}
         CMP     r0, r13_svc
-01      LDMHIFD r0!, {r2-r9}
-        STMHIFD r12!, {r2-r9}
+01      LDMHIDB r0!, {r2-r9}
+        STMHIDB r12!, {r2-r9}
         CMP     r0, r13_svc
         BHI     %B01
 
@@ -625,6 +797,8 @@ SomethingsGoneWrong
         LDR     r3, NThreads
         MOV     r8, #0
         LDR     r4, Context
+        Debug   "SomethingsGoneWrong!"
+        DebugReg r4, "Context="
         STR     r8, Context
         TEQ     r4, r4, ASR #31 ; 0 (foreground was active) or -1 (nothing was)?
         LDRNE   r4, [r2, r4, LSL #2]
@@ -650,6 +824,11 @@ SomethingsGoneWrong
 PreEmptionRecovery
         ; Enter in SVC mode with interrupts disabled (needs to set up both r14_svc and r14_sys)
         ; with r13_svc and r13_sys already set up and r10 pointing to end of RecoveryRegs
+      [ DEBUGLIB
+        Debug   "PreEmptionRecovery"
+        SUB     r1, r10, #Thread_RecoveryRegs + ?Thread_RecoveryRegs
+        DebugReg r1, "thread="
+      ]
 
         ; Restore environment stored in the thread structure
         MOV     r0, r13_svc, LSR #20
@@ -660,9 +839,46 @@ PreEmptionRecovery
         LDMDB   r10, {r0, r4-r10, r14_svc} ; load thread r4-r10,r14_svc; point r0 at stack frame
         ASSERT  Thread_StackFrame = Thread_RecoveryRegs - 4
 
+      [ DEBUGLIB
+        DebugReg r0, "frame="
+        Debug   "Regs:"
+        LDR     r3, [r0, #ISF_R0]
+        DebugReg r3
+        LDR     r3, [r0, #ISF_R1]
+        DebugReg r3
+        LDR     r3, [r0, #ISF_R2]
+        DebugReg r3
+        LDR     r3, [r0, #ISF_R3]
+        DebugReg r3
+        DebugReg r4
+        DebugReg r5
+        DebugReg r6
+        DebugReg r7
+        DebugReg r8
+        DebugReg r9
+        DebugReg r10
+        LDR     r3, [r0, #ISF_R11]
+        DebugReg r3
+        LDR     r3, [r0, #ISF_R12]
+        DebugReg r3
+        DebugReg r13, "r13_svc="
+        DebugReg r14, "r14_svc="
+        LDR     r3, [r0, #ISF_PC]
+        DebugReg r3, "pc="
+      ]
+
         ; Get registers from IRQ stack, and patch up IRQ stack to say we've resumed
         MSR     CPSR_c, #I32_bit :OR: IRQ32_mode  ; we need a spare register to do the following
         LDR     r1, [r0, #ISF_CPSR]!              ; pull interrupted CPSR from IRQ frame
+      [ DEBUGLIB
+        DebugReg r1, "CPSR="
+        MSR     CPSR_c, #I32_bit :OR: SYS32_mode
+        MOV     r2, r13
+        MOV     r12, r14
+        MSR     CPSR_c, #I32_bit :OR: IRQ32_mode
+        DebugReg r2, "r13_sys="
+        DebugReg r12, "r14_sys="
+      ]
         MSR     SPSR_cxsf, r1                     ; save in SPSR for now
         LDR     r14_irq, [r0, #ISF_PC - ISF_CPSR] ; pull interrupted PC from IRQ frame
         MOV     r1, #I32_bit :OR: IRQ32_mode
@@ -674,6 +890,7 @@ PreEmptionRecovery
         ; to free up space and deal with routines being resumed out-of-order.
         LDR     r12, IRQsema
         LDR     r2, [r12]
+        DebugReg r2, "*IRQsema="
         B       %FT02
 01      ADD     r13_irq, r2, #ISFSize
         LDR     r2, [r2, #ISF_IRQsema]
@@ -683,7 +900,16 @@ PreEmptionRecovery
         TEQ     r11, r1
         BEQ     %B01
 03      STR     r2, [r12]
-
+        STR     r2, LastKnownIRQsema
+      [ DEBUGLIB
+        MOV     r1, r14
+        MOV     r3, r13
+        MSR     CPSR_c, #I32_bit :OR: SVC32_mode
+        DebugReg r2, "now "
+        DebugReg r1, "pc="
+        DebugReg r3, "r13_irq="
+        MSR     CPSR_c, #I32_bit :OR: IRQ32_mode
+      ]
         ; Jump back into interrupted code
         LDMDB   r0, {r1-r3, r11, r12}
         LDR     r0, [r0, #ISF_R0 - ISF_CPSR]
@@ -698,10 +924,17 @@ ThreadResumed
         ; simply pull the next stack frame off the IRQ stack.
 
         ; Enter in IRQ mode with interrupts disabled.
+        Debug   "ThreadResumed"
         LDR     r11, IRQsema
         LDR     r13, [r11]
         Pull    "r0"
+        DebugReg r0, "IRQsema now "
         STR     r0, [r11]
+        STR     r0, LastKnownIRQsema
+      [ DEBUGLIB
+        LDR     r0, [sp, #7*4]
+        DebugReg r0, "pc="
+      ]
         Pull    "r1-r3, r11, r12, lr"
         MSR     SPSR_cxsf, lr
         Pull    "r0, pc",, ^
@@ -709,8 +942,6 @@ ThreadResumed
         EXPORT  PriorityTable
 PriorityTable
         %       256 * PrioritySize
-
-        InsertNDRDebugRoutines
 
         EXPORT  ErrorBlock_PollwordInUse
 ErrorBlock_PollwordInUse

@@ -15,6 +15,8 @@
 # Makefile for RTSupport
 #
 
+DEBUG ?= FALSE
+
 COMPONENT   = Real Time Support
 TARGET      = RTSupport
 OBJS        = debug global mess resmess2 scheduler module
@@ -28,6 +30,12 @@ ASMHDRS     = ${TARGET}
 ASMCHDRS    = ${TARGET}
 ROMCDEFINES = -DROM_MODULE
 CUSTOMRES   = custom
+
+ifeq ($(DEBUG),TRUE)
+CFLAGS += -DDEBUGLIB
+ASFLAGS += -PD "DEBUGLIB SETL {TRUE}"
+LIBS = ${DEBUGLIBS} ${NET5LIBS}
+endif
 
 include CModule
 

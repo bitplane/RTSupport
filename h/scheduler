@@ -109,6 +109,10 @@ extern const void * const volatile VectorClaimAddress;
 extern priority_t PriorityTable[256];
 extern _kernel_oserror ErrorBlock_PollwordInUse;
 
+#ifdef DEBUGLIB
+extern uint32_t asm_DADWriteC;
+#endif
+
 
 /*****************************************************************************
 * Function prototypes

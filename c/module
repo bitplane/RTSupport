@@ -155,11 +155,17 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   debug_initialise("RTSupport", "null:", "");
   debug_atexit();
   debug_set_taskname_prefix(false);
-  debug_set_area_level_prefix(true);
+  debug_set_area_level_prefix(false);
   debug_set_area_pad_limit(0);
   debug_set_device(DADEBUG_OUTPUT);
   debug_set_raw_device(NULL_OUTPUT);
   debug_set_trace_device(NULL_OUTPUT);
+
+#ifdef DEBUGLIB
+  /* Set up the DADWriteC ptr used by the assembler code */
+#define DADebug_GetWriteCAddress 0x531C0
+  _swix(DADebug_GetWriteCAddress,_OUT(0),&asm_DADWriteC);
+#endif
 
   if (getenv("RTSupport$Path") == NULL)
   {
@@ -387,6 +393,7 @@ _kernel_oserror *module_Finalise(int fatal, int podule, void *pw)
 {
   IGNORE(fatal);
   IGNORE(podule);
+  dprintf(("","Finalising\n"));
   _swix(OS_Release, _INR(0,2), TickerV, tickerv_veneer, pw);
   _swix(OS_Release, _INR(0,2), UnthreadV, static_OldKernel ? MyUnthreadV_OldKernel : MyUnthreadV, 0);
   _swix(OS_DynamicArea, _INR(0,1), 1, static_DANumber);
@@ -431,7 +438,12 @@ void module_ServiceHandler(int service_number, _kernel_swi_regs *r, void *pw)
         /* Exception or abort error */
         bool irqs_were_disabled = _kernel_irqs_disabled();
         if (!irqs_were_disabled) _kernel_irqs_off();
+        dprintf(("","Exception/abort detected, InBackground=%d\n",InBackground));
         if (InBackground) SomethingsGoneWrong();
+#ifdef DEBUGLIB
+        /* Disable assembler debugging */
+        asm_DADWriteC = NULL;
+#endif
         if (!irqs_were_disabled) _kernel_irqs_on();
       }
       break;
@@ -460,31 +472,48 @@ void module_ServiceHandler(int service_number, _kernel_swi_regs *r, void *pw)
 _kernel_oserror *module_SWIHandler(int swi_offset, _kernel_swi_regs *r, void *pw)
 {
   IGNORE(pw);
+  _kernel_oserror *e = NULL;
   switch (swi_offset)
   {
     case RT_Register - RT_00:
-      return Register(r->r[0], (const void *) r->r[1], r->r[2], r->r[3], (volatile const uint32_t *) r->r[4], r->r[5], r->r[6], r->r[7], (thread_t **) r->r);
+      e = Register(r->r[0], (const void *) r->r[1], r->r[2], r->r[3], (volatile const uint32_t *) r->r[4], r->r[5], r->r[6], r->r[7], (thread_t **) r->r);
+      break;
 
     case RT_Deregister - RT_00:
-      return Deregister(r->r[0], (thread_t *) r->r[1]);
+      e = Deregister(r->r[0], (thread_t *) r->r[1]);
+      break;
 
     case RT_Yield - RT_00:
-      return Yield(false, (volatile uint32_t *)(r->r[1]), 0) ?
+      e = Yield(false, (volatile uint32_t *)(r->r[1]), 0) ?
         mess_MakeError(ErrorNumber_RTSupport_CantYield, 0) : NULL;
+      break;
 
     case RT_TimedYield - RT_00:
-      return Yield(true, (volatile uint32_t *)(r->r[1]), r->r[2]) ?
+      e = Yield(true, (volatile uint32_t *)(r->r[1]), r->r[2]) ?
         mess_MakeError(ErrorNumber_RTSupport_CantYield, 0) : NULL;
+      break;
 
     case RT_ChangePriority - RT_00:
-      return ChangePriority(r->r[0], (thread_t *) r->r[1], r->r[2], (uint32_t *) r->r);
+      e = ChangePriority(r->r[0], (thread_t *) r->r[1], r->r[2], (uint32_t *) r->r);
+      break;
 
     case RT_ReadInfo - RT_00:
-      return ReadInfo(r->r[0], (uint32_t *) r->r);
+      e = ReadInfo(r->r[0], (uint32_t *) r->r);
+      break;
 
     default:
-      return mess_MakeError(ErrorNumber_RTSupport_UKSWI, 0);
+      e = mess_MakeError(ErrorNumber_RTSupport_UKSWI, 0);
+      break;
   }
+  if(e)
+  {
+    dprintf(("","SWI %02x returning with error %x %s\n",swi_offset,e->errnum,e->errmess));
+  }
+  else
+  {
+    dprintf(("","SWI %02x OK\n",swi_offset));
+  }
+  return e;
 }
 
 /*****************************************************************************
@@ -519,6 +548,7 @@ _kernel_oserror *module_TickerVHandler(_kernel_swi_regs *r, void *pw)
     thread_t *thread = *ptr;
     if (thread->timeout_flag && ((signed)(time - thread->timeout)) >= 0)
     {
+      dprintf(("","Waking thread %08x from ticker routine\n",thread));
       thread->timeout_flag = false;
       thread->pollword = &Pollword_TimedOut;
     }
@@ -553,7 +583,15 @@ _kernel_oserror *module_TickerVHandler(_kernel_swi_regs *r, void *pw)
 static _kernel_oserror *Register(uint32_t flags, const void *entry, uint32_t r0, uint32_t r12,
     volatile const uint32_t *pollword, uint32_t r10, uint32_t r13sys, uint32_t priority, thread_t ** restrict r_handle)
 {
-  IGNORE(flags);
+  dprintf(("","RT_Register: flags %08x entry %08x r0 %08x r12 %08x pollword %08x r10 %08x r13sys %08x priority ",flags,entry,r0,r12,pollword,r10,r13sys));
+  if(priority < 256u)
+    dprintf(("","%d\n",priority));
+  else
+    dprintf(("","%s\n",(char *) priority));
+  if(flags)
+  {
+    return mess_MakeError(ErrorNumber_RTSupport_UKFlags, 0);
+  }
   _kernel_oserror *e = NULL;
   if (priority > 255u)
   {
@@ -611,6 +649,7 @@ static _kernel_oserror *Register(uint32_t flags, const void *entry, uint32_t r0,
     }
     else
     {
+      dprintf(("","Created thread %08x\n",new_thread));
       *new_thread = (thread_t) {
         .r0 = r0,
         .r12 = r12,
@@ -650,7 +689,9 @@ static _kernel_oserror *Register(uint32_t flags, const void *entry, uint32_t r0,
       {
         /* It needs to pre-empt us already! */
         static const uint32_t set_pollword = -1;
+        dprintf(("","RT_Register yielding to new thread %08x\n",new_thread));
         Yield(false, &set_pollword, 0);
+        dprintf(("","RT_Register yield complete (thread %08x)\n",new_thread));
       }
       if (!irqs_were_disabled) _kernel_irqs_on();
       *r_handle = new_thread;
@@ -679,10 +720,14 @@ static _kernel_oserror *Register(uint32_t flags, const void *entry, uint32_t r0,
 *****************************************************************************/
 static _kernel_oserror *Deregister(uint32_t flags, thread_t *handle)
 {
-  IGNORE(flags);
+  if(flags)
+  {
+    return mess_MakeError(ErrorNumber_RTSupport_UKFlags, 0);
+  }
   _kernel_oserror *e = NULL;
   bool irqs_were_disabled = _kernel_irqs_disabled();
   if (!irqs_were_disabled) _kernel_irqs_off();
+  dprintf(("","RT_Deregister: thread %08x\n",handle));
   uint32_t index;
   uint32_t last_index = NThreads;
   for (index = 1; index < last_index; index++)
@@ -708,9 +753,11 @@ static _kernel_oserror *Deregister(uint32_t flags, thread_t *handle)
     /* If it was pre-empted, patch up the IRQ stack so no attempt is made to resume it */
     bool stack_frame_needs_poking = false;
     volatile uint32_t * volatile stack_frame;
+    dprintf(("","index %d Context %d *IRQsema %08x LastKnownIRQsema %08x\n",index,Context,*IRQsema,LastKnownIRQsema));
     if (thread->pollword == &Pollword_PreEmpted)
     {
       /* Thread was preempted by another thread */
+      dprintf(("","Thread was preempted by another thread\n"));
       stack_frame_needs_poking = true;
       stack_frame = thread->stack_frame;
     }
@@ -718,14 +765,19 @@ static _kernel_oserror *Deregister(uint32_t flags, thread_t *handle)
     {
       /* Thread was only preempted by an IRQ (so this SWI is being called from that IRQ or a nested one) */
       /* We have to find the stack frame manually, because it didn't exist while the thread was executing */
+      dprintf(("","Thread was preempted by an IRQ\n"));
       stack_frame = *IRQsema;
       while ((volatile uint32_t *) *stack_frame != LastKnownIRQsema && /* shouldn't happen, except perhaps after abort */ *stack_frame != 0)
+      {
+        dprintf(("","Skipping stack frame at %08x\n",stack_frame));
         stack_frame = (volatile uint32_t *) *stack_frame;
+      }
       if (*stack_frame != NULL)
         stack_frame_needs_poking = true;
     }
     if (stack_frame_needs_poking)
     {
+      dprintf(("","Poking stack frame at %08x\n",stack_frame));
       stack_frame[6] = 0x92; /* I32_bit | IRQ32_mode */
       stack_frame[8] = (uint32_t) ThreadResumed;
     }
@@ -759,7 +811,12 @@ static _kernel_oserror *Deregister(uint32_t flags, thread_t *handle)
     }
     /* Free the thread structure, and finish with the current execution context if necessary */
     free(thread);
-    if (original_Context == index) Die();
+    if (original_Context == index)
+    {
+      dprintf(("","RT_Deregister exiting via Die() (thread %08x)\n",handle));
+      Die();
+      dprintf(("","RT_Deregister Die() failed (thread %08x)\n",handle));
+    }
   }
   if (!irqs_were_disabled) _kernel_irqs_on();
   return e;
@@ -786,7 +843,16 @@ static _kernel_oserror *Deregister(uint32_t flags, thread_t *handle)
 *****************************************************************************/
 static _kernel_oserror *ChangePriority(uint32_t flags, thread_t * restrict handle, uint32_t priority, uint32_t * restrict r_priority)
 {
-  IGNORE(flags);
+  if(flags)
+  {
+    return mess_MakeError(ErrorNumber_RTSupport_UKFlags, 0);
+  }
+  dprintf(("","RT_ChangePriority: handle %08x priority ",handle));
+  if(priority < 256u)
+    dprintf(("","%d\n",priority));
+  else
+    dprintf(("","%s\n",(char *) priority));
+
   _kernel_oserror *e = NULL;
   if (priority > 255u)
   {
@@ -870,7 +936,9 @@ static _kernel_oserror *ChangePriority(uint32_t flags, thread_t * restrict handl
             (Context == index && priority < Priority))
         {
           static const uint32_t set_pollword = -1;
+          dprintf(("","RT_ChangePriority yielding (%s, thread %08x)\n",(Context==index?"Demoted ourselves":"Promoted pending thread"),handle));
           Yield(false, &set_pollword, 0); /* scope here for a version that only starts scanning at current thread's priority */
+          dprintf(("","RT_ChangePriority yield complete (thread %08x)\n",handle));
         }
       }
       if (!irqs_were_disabled) _kernel_irqs_on();
