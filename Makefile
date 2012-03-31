@@ -39,8 +39,7 @@ endif
 
 include CModule
 
-CFLAGS     += -We -cpu 3 # <-- cpu 3 to (hopefully temporarily) fix internal compiler error due to __packed
-ASFLAGS    += -cpu 4
+CFLAGS     += -We
 CDFLAGS    += -DDEBUGLIB
 
 #
