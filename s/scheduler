@@ -321,8 +321,10 @@ Yield
 99
         MSR     CPSR_c, r11
         Debug   "Can't yield, in IRQ"
-        ADD     r13_svc, r13_svc, #8*4 + 1*4
+        ADD     r13_svc, r13_svc, #8*4 ; Junk reserved words, PSR
+        LDMIA   r13_svc, {r14_usr}^
         MOV     r0, #1
+        ADD     r13_svc, r13_svc, #4
         Return  "r4-r9,r11"
 
 
