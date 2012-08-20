@@ -646,11 +646,7 @@ return_to_foreground
         MOV     r2, #0
         STR     r2, InBackground
         MOV     r0, #UpCallV
-      [ DEBUGLIB
         ADRL    r1, MyUpCallV
-      |
-        ADR     r1, MyUpCallV
-      ]
         SWI     XOS_Release ; nobody cares if r14_svc is corrupted here!
         STR     r2, Context
         STR     r2, Priority ; foreground should always specify a full rescan, but just in case
