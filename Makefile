@@ -19,9 +19,8 @@ DEBUG ?= FALSE
 
 COMPONENT   = Real Time Support
 TARGET      = RTSupport
-OBJS        = debug global mess resmess2 scheduler module
+OBJS        = debug global mess scheduler module
 RES_AREA    = resmess_ResourcesFiles
-CMHGFILE    = modhdr
 CMHGDEPENDS = module
 CMHGAUTOHDR = ${TARGET}
 CMHGFILE_SWIPREFIX = RT
@@ -29,7 +28,7 @@ HDRS        =
 ASMHDRS     = ${TARGET}
 ASMCHDRS    = ${TARGET}
 ROMCDEFINES = -DROM_MODULE
-CUSTOMRES   = custom
+INSTRES_FILES = Priorities
 
 ifeq ($(DEBUG),TRUE)
 CFLAGS += -DDEBUGLIB
@@ -41,15 +40,5 @@ include CModule
 
 CFLAGS     += -We
 CDFLAGS    += -DDEBUGLIB
-
-#
-# Custom resource recipe
-#
-resources: resources-${CMDHELP}
-	${CP} Resources.Priorities ${RESFSDIR}.Priorities ${CPFLAGS}
-	@${ECHO} ${COMPONENT}: resources copied to Messages module
-
-resmess2.o: Resources.Priorities
-	${RESGEN} resmess2_ResourcesFiles o.resmess2 Resources.Priorities Resources.${TARGET}.Priorities
 
 # Dynamic dependencies:
