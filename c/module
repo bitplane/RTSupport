@@ -51,7 +51,7 @@
 #include "debug.h"
 #include "global.h"
 #include "mess.h"
-#include "modhdr.h"
+#include "RTSupportHdr.h"
 #include "resmess.h"
 #include "scheduler.h"
 
@@ -145,7 +145,6 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   _kernel_oserror *e = NULL;
 #ifndef ROM_MODULE
   bool MessagesFileRegistered = false;
-  bool PriorityMessagesFileRegistered = false;
 #endif
   bool MessagesOpen = false;
   bool PriorityMessagesOpen = false;
@@ -179,12 +178,6 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   if (!e)
   {
     MessagesFileRegistered = true;
-
-    e = _swix(ResourceFS_RegisterFiles, _IN(0), resmess2_ResourcesFiles());
-  }
-  if (!e)
-  {
-    PriorityMessagesFileRegistered = true;
 #endif
 
     size_t MessagesSize;
@@ -365,7 +358,6 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   if (e && MessagesOpen) _swix(MessageTrans_CloseFile, _IN(0), &global_MessageFD);
   if (e) free(static_MessagesBuffer);
 #ifndef ROM_MODULE
-  if (e && PriorityMessagesFileRegistered) _swix(ResourceFS_DeregisterFiles, _IN(0), resmess2_ResourcesFiles());
   if (e && MessagesFileRegistered) _swix(ResourceFS_DeregisterFiles, _IN(0), resmess_ResourcesFiles());
 #endif
   return e;
@@ -402,7 +394,6 @@ _kernel_oserror *module_Finalise(int fatal, int podule, void *pw)
   _swix(MessageTrans_CloseFile, _IN(0), &global_MessageFD);
   free(static_MessagesBuffer);
 #ifndef ROM_MODULE
-  _swix(ResourceFS_DeregisterFiles, _IN(0), resmess2_ResourcesFiles());
   _swix(ResourceFS_DeregisterFiles, _IN(0), resmess_ResourcesFiles());
 #endif
   return NULL;
