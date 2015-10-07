@@ -195,6 +195,8 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   if (!e)
   {
     MessagesOpen = true;
+    /* Cache all the errors to avoid messagetrans lookups at runtime */
+    mess_PrepareErrors(ErrorNumber_RTSupport_PollwordInUse, ErrorNumber_RTSupport_UKFlags, 0, 0);
 
     size_t PriorityMessagesSize;
     e = _swix(MessageTrans_FileInfo, _IN(1)|_OUT(2), "RTSupport:Priorities", &PriorityMessagesSize);
@@ -355,7 +357,11 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   if (e && DACreated) _swix(OS_DynamicArea, _INR(0,1), 1, static_DANumber);
   if (e && PriorityMessagesOpen) _swix(MessageTrans_CloseFile, _IN(0), &global_PriorityMessageFD);
   if (e) free(static_PriorityMessagesBuffer);
-  if (e && MessagesOpen) _swix(MessageTrans_CloseFile, _IN(0), &global_MessageFD);
+  if (e && MessagesOpen)
+  {
+    mess_DiscardErrors();
+    _swix(MessageTrans_CloseFile, _IN(0), &global_MessageFD);
+  }
   if (e) free(static_MessagesBuffer);
 #ifndef ROM_MODULE
   if (e && MessagesFileRegistered) _swix(ResourceFS_DeregisterFiles, _IN(0), resmess_ResourcesFiles());
@@ -391,6 +397,7 @@ _kernel_oserror *module_Finalise(int fatal, int podule, void *pw)
   _swix(OS_DynamicArea, _INR(0,1), 1, static_DANumber);
   _swix(MessageTrans_CloseFile, _IN(0), &global_PriorityMessageFD);
   free(static_PriorityMessagesBuffer);
+  mess_DiscardErrors();
   _swix(MessageTrans_CloseFile, _IN(0), &global_MessageFD);
   free(static_MessagesBuffer);
 #ifndef ROM_MODULE
