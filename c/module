@@ -657,7 +657,10 @@ static _kernel_oserror *Register(uint32_t flags, const void *entry, uint32_t r0,
         .default_pollword = pollword,
         .priority = priority,
         .entry = entry,
-        .psr = 0x1F, /* SYS mode, IRQs/FIQs enabled */
+        .psr = 0x11F, /* SYS32 mode with IRQs/FIQs unmasked, then from TakeReset()
+                       * in B1.9.1 of DDI0406C: async aborts masked, little endian,
+                       * ARM mode, with any N/Z/C/V/Q/GE/IT flags.
+                       */
         .pollword = pollword,
         .r13_svc = (uint32_t) static_RoutineSVCStack,
         .r10 = r10,
