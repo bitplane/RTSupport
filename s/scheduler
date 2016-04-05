@@ -44,6 +44,7 @@ OverloadThreshold SETA 50 ; centiseconds after which to only wake pre-empted thr
         GET     Hdr:UpCall
         GET     Hdr:RTSupport
         GET     Hdr:CPU.Arch
+        GET     Hdr:OSMisc
 
         GET     Hdr:Proc
 
@@ -111,6 +112,14 @@ Pollword_Aborted
 Pollword_CollateralDamage
         DCD     0       ; had the misfortune to be pre-empted when an exception occurred
 
+        IMPORT  seriouserrorv_veneer
+        EXPORT  asm_seriouserrorv_veneer
+asm_seriouserrorv_veneer
+        ; Pre-veneer for SeriousErrorV
+        ; For some reason codes SeriousErrorV will be called in ABT mode, with the SVC stack in an unknown state. Current versions of CMHG can't deal with this (always force a switch to SVC mode), so use this pre-veneer to filter out all except the reason code we're interested in.
+        TEQ     r2, #SeriousErrorV_Recover
+        BEQ     seriouserrorv_veneer
+        MOV     pc, lr
 
         AREA    |RW$$Code|, CODE ; not READONLY
 

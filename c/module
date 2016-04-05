@@ -150,6 +150,7 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   bool PriorityMessagesOpen = false;
   bool DACreated = false;
   bool OnUnthreadV = false;
+  bool OnTickerV = false;
 
   debug_initialise("RTSupport", "null:", "");
   debug_atexit();
@@ -352,7 +353,13 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
     OnUnthreadV = true;
     e = _swix(OS_Claim, _INR(0,2), TickerV, tickerv_veneer, pw);
   }
+  if (!e)
+  {
+    OnTickerV = true;
+    e = _swix(OS_Claim, _INR(0,2), SeriousErrorV, asm_seriouserrorv_veneer, pw);
+  }
 
+  if (e && OnTickerV) _swix(OS_Release, _INR(0,2), TickerV, tickerv_veneer, pw);
   if (e && OnUnthreadV) _swix(OS_Release, _INR(0,2), UnthreadV, static_OldKernel ? MyUnthreadV_OldKernel : MyUnthreadV, 0);
   if (e && DACreated) _swix(OS_DynamicArea, _INR(0,1), 1, static_DANumber);
   if (e && PriorityMessagesOpen) _swix(MessageTrans_CloseFile, _IN(0), &global_PriorityMessageFD);
@@ -392,6 +399,7 @@ _kernel_oserror *module_Finalise(int fatal, int podule, void *pw)
   IGNORE(fatal);
   IGNORE(podule);
   dprintf(("","Finalising\n"));
+  _swix(OS_Release, _INR(0,2), SeriousErrorV, asm_seriouserrorv_veneer, pw);
   _swix(OS_Release, _INR(0,2), TickerV, tickerv_veneer, pw);
   _swix(OS_Release, _INR(0,2), UnthreadV, static_OldKernel ? MyUnthreadV_OldKernel : MyUnthreadV, 0);
   _swix(OS_DynamicArea, _INR(0,1), 1, static_DANumber);
@@ -551,6 +559,38 @@ _kernel_oserror *module_TickerVHandler(_kernel_swi_regs *r, void *pw)
       thread->pollword = &Pollword_TimedOut;
     }
   }
+  return NULL;
+}
+
+/*****************************************************************************
+* module_SeriousErrorVHandler
+*
+* SeriousErrorV handler
+*
+* Assumptions
+*  SeriousErrorV_Recover reason code, IRQs disabled
+*
+* Inputs
+*  r:          register block
+*  pw:         the 'R12' value
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NULL if successful; otherwise pointer to error block
+*****************************************************************************/
+_kernel_oserror *module_SeriousErrorVHandler(_kernel_swi_regs *r, void *pw)
+{
+  IGNORE(r);
+  IGNORE(pw);
+  /* The OS has just reset the stacks, and is letting us know about it */
+  if (InBackground) SomethingsGoneWrong();
+  LastKnownIRQsema = NULL;
+#ifdef DEBUGLIB
+  /* Disable assembler debugging */
+  asm_DADWriteC = NULL;
+#endif
   return NULL;
 }
 

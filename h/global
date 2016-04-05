@@ -89,6 +89,8 @@ extern MessagesFD global_PriorityMessageFD;
 * Function prototypes
 *****************************************************************************/
 
+extern void asm_seriouserrorv_veneer(void);
+
 #endif  /* end of sentry #ifdef */
 /*****************************************************************************
 * END OF FILE
