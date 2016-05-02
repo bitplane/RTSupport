@@ -225,7 +225,7 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
     uint32_t ID;
     __asm("MRC p15,0,ID,c0,c0,0");
     if ((ID & 0xF000) == 0 /* pre-ARM7 */ ||
-        ((ID & 0xF000) == 7 /* ARM7 */ && (ID & 0x800000) == 0 /* ARM7 v3 not v4T */ ))
+        ((ID & 0xF000) == 0x7000 /* ARM7 */ && (ID & 0x800000) == 0 /* ARM7 v3 not v4T */ ))
       e = mess_MakeError(ErrorNumber_RTSupport_BadOS, 0);
   }
   if (!e)
