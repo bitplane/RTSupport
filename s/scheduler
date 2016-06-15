@@ -634,6 +634,9 @@ IRQStk
         EXPORT  IRQsema
 IRQsema
         DCD     0       ; Pointer to kernel IRQsema val
+        EXPORT  PreEmptionRecoveryPtr
+PreEmptionRecoveryPtr
+        DCD     0       ; Which pre-emption recovery routine to use
  [ DEBUGLIB
         EXPORT  asm_DADWriteC
 asm_DADWriteC
@@ -733,7 +736,7 @@ PreEmpt
         DebugReg r8
       ]
 
-        LDR     r3, =PreEmptionRecovery
+        LDR     r3, PreEmptionRecoveryPtr
         MOV     r9, #I32_bit :OR: SVC32_mode
         LDR     r10, =Pollword_PreEmpted
         MOV     r12, #0 ; timeout not valid
@@ -828,6 +831,25 @@ SomethingsGoneWrong
         LDR     r9, OriginalR9
         MOV     pc, r14
 
+        EXPORT  PreEmptionRecoveryCLREX
+PreEmptionRecoveryCLREX
+        ; Returning to a pre-empted routine, so we need to issue a CLREX
+        ; N.B. debug code (when enabled) will ruin this if it does something
+        ; which leaves the exclusive monitor in the locked state!
+      [ NoARMv6
+        ; No action required
+      ELIF NoARMK
+        ; ARMv6, need dummy STREX
+        ; Use the word below SP
+        SUB     r1, r13, #4
+        STREX   r0, r1, [r1]
+      |
+        ; ARMv6K+, have CLREX
+        CLREX
+      ]
+        ; Fall through...
+
+        EXPORT  PreEmptionRecovery
 PreEmptionRecovery
         ; Enter in SVC mode with interrupts disabled (needs to set up both r14_svc and r14_sys)
         ; with r13_svc and r13_sys already set up and r10 pointing to end of RecoveryRegs

@@ -45,6 +45,7 @@
 #include "Global/RISCOS.h"
 #include "Global/Services.h"
 #include "Global/OSRSI6.h"
+#include "Global/OSMisc.h"
 #include "Interface/RTSupport.h"
 #include "DebugLib/DebugLib.h"
 
@@ -166,6 +167,17 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
 #define DADebug_GetWriteCAddress 0x531C0
   _swix(DADebug_GetWriteCAddress,_OUT(0),&asm_DADWriteC);
 #endif
+
+  /* Decide which pre-emption recovery routine to use */
+  uint32_t cpuflags;
+  if (_swix(OS_PlatformFeatures, _IN(0)|_OUT(0), OSPlatformFeatures_ReadCodeFeatures, &cpuflags) || !(cpuflags & CPUFlag_LoadStoreEx))
+  {
+    PreEmptionRecoveryPtr = PreEmptionRecovery;
+  }
+  else
+  {
+    PreEmptionRecoveryPtr = PreEmptionRecoveryCLREX;
+  }
 
   if (getenv("RTSupport$Path") == NULL)
   {

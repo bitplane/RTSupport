@@ -105,6 +105,7 @@ extern volatile void *LastKnownIRQsema;
 extern volatile uint32_t Priority;
 extern void **IRQsema;
 extern void *IRQStk;
+extern void *PreEmptionRecoveryPtr;
 extern const void * const volatile VectorClaimAddress;
 extern priority_t PriorityTable[256];
 extern _kernel_oserror ErrorBlock_PollwordInUse;
@@ -138,6 +139,8 @@ extern uint32_t MyUnthreadV[];
 extern uint32_t SomethingsGoneWrong[];
 #define SomethingsGoneWrong (*(void (*)(void)) SomethingsGoneWrong)
 /* extern void SomethingsGoneWrong(void); */
+extern uint32_t PreEmptionRecoveryCLREX[];
+extern uint32_t PreEmptionRecovery[];
 extern uint32_t ThreadResumed[];
 
 
