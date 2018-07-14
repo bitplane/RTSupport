@@ -107,6 +107,7 @@ void dadprintf(const char * restrict format, ...)
     va_list ap;
     va_start(ap, format);
     vsnprintf(string, sizeof string, format, ap);
+    va_end(ap);
     size_t n = strlen(string);
     for (size_t i = 0; i < n; i++)
     {
