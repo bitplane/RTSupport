@@ -737,7 +737,7 @@ PreEmpt
       ]
 
         LDR     r3, PreEmptionRecoveryPtr
-        MOV     r9, #I32_bit :OR: SVC32_mode
+        LDR     r9, =A32_bit :OR: I32_bit :OR: SVC32_mode
         LDR     r10, =Pollword_PreEmpted
         MOV     r12, #0 ; timeout not valid
         ADD     r0, r0, #Thread_Entry
@@ -910,7 +910,7 @@ PreEmptionRecovery
       ]
         MSR     SPSR_cxsf, r1                     ; save in SPSR for now
         LDR     r14_irq, [r0, #ISF_PC - ISF_CPSR] ; pull interrupted PC from IRQ frame
-        MOV     r1, #I32_bit :OR: IRQ32_mode
+        LDR     r1, =A32_bit :OR: I32_bit :OR: IRQ32_mode
         STR     r1, [r0, #ISF_CPSR - ISF_CPSR]
         ADR     r1, ThreadResumed                 ; also used below
         STR     r1, [r0, #ISF_PC - ISF_CPSR]      ; mark IRQ frame as resumed

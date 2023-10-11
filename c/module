@@ -831,7 +831,7 @@ static _kernel_oserror *Deregister(uint32_t flags, thread_t *handle)
     if (stack_frame_needs_poking)
     {
       dprintf(("","Poking stack frame at %08x\n",stack_frame));
-      stack_frame[6] = 0x92; /* I32_bit | IRQ32_mode */
+      stack_frame[6] = 0x192; /* A32_bit | I32_bit | IRQ32_mode */
       stack_frame[8] = (uint32_t) ThreadResumed;
     }
     /* Sort out the priority table */
