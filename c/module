@@ -235,7 +235,11 @@ _kernel_oserror *module_Initialise(const char *cmd_tail, int podule_base, void *
   {
     /* Check CPU architecture version - SYS mode first available in v4 */
     uint32_t ID;
+#ifdef __GNUC__
+    __asm volatile ("mrc p15, 0, %0, c0, c0, 0" : "=r" (ID));
+#else
     __asm("MRC p15,0,ID,c0,c0,0");
+#endif
     if ((ID & 0xF000) == 0 /* pre-ARM7 */ ||
         ((ID & 0xF000) == 0x7000 /* ARM7 */ && (ID & 0x800000) == 0 /* ARM7 v3 not v4T */ ))
       e = mess_MakeError(ErrorNumber_RTSupport_BadOS, 0);
@@ -700,7 +704,7 @@ static _kernel_oserror *Register(uint32_t flags, const void *entry, uint32_t r0,
     else
     {
       dprintf(("","Created thread %08x\n",new_thread));
-      *new_thread = (thread_t) {
+      thread_t initial = {
         .r0 = r0,
         .r12 = r12,
         .svc_stack_base = static_RoutineSVCStack,
@@ -718,6 +722,7 @@ static _kernel_oserror *Register(uint32_t flags, const void *entry, uint32_t r0,
         .r10 = r10,
         .r13_sys = r13sys,
       };
+      memcpy(new_thread, &initial, sizeof initial);
       ThreadTable[NThreads++] = new_thread;
       switch (PriorityTable[priority].usage)
       {

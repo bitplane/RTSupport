@@ -71,7 +71,11 @@ typedef struct
 }
 thread_t;
 
+#ifdef __GNUC__
+typedef volatile struct
+#else
 typedef __packed volatile struct
+#endif
 {
   uint8_t next;
   uint8_t usage;

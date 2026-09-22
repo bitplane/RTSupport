@@ -38,7 +38,9 @@ endif
 
 include CModule
 
+ifneq (${TOOLCHAIN},GNU)
 CFLAGS     += -We
+endif
 CDFLAGS    += -DDEBUGLIB
 
 # Dynamic dependencies:
