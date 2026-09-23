@@ -95,6 +95,42 @@ extern void Pollword_TimedOut(void);
 /*****************************************************************************
 * Global variables
 *****************************************************************************/
+#ifdef __GNUC__
+/* These words live beside scheduler instructions in RW$$Code.  Treat their
+ * addresses as code so GCC does not redirect C accesses to a copied data area. */
+extern void RTCode_ThreadTable(void) __asm__("ThreadTable");
+#define ThreadTable (*(thread_t * volatile * volatile *) RTCode_ThreadTable)
+extern void RTCode_ThreadTableSize(void) __asm__("ThreadTableSize");
+#define ThreadTableSize (*(volatile size_t *) RTCode_ThreadTableSize)
+extern void RTCode_NThreads(void) __asm__("NThreads");
+#define NThreads (*(volatile size_t *) RTCode_NThreads)
+extern void RTCode_Context(void) __asm__("Context");
+#define Context (*(volatile uint32_t *) RTCode_Context)
+extern void RTCode_InBackground(void) __asm__("InBackground");
+#define InBackground (*(volatile bool *) RTCode_InBackground)
+extern void RTCode_NTicks(void) __asm__("NTicks");
+#define NTicks (*(volatile uint32_t *) RTCode_NTicks)
+extern void RTCode_LastKnownIRQsema(void) __asm__("LastKnownIRQsema");
+#define LastKnownIRQsema (*(volatile void **) RTCode_LastKnownIRQsema)
+extern void RTCode_Priority(void) __asm__("Priority");
+#define Priority (*(volatile uint32_t *) RTCode_Priority)
+extern void RTCode_IRQsema(void) __asm__("IRQsema");
+#define IRQsema (*(void ***) RTCode_IRQsema)
+extern void RTCode_IRQStk(void) __asm__("IRQStk");
+#define IRQStk (*(void **) RTCode_IRQStk)
+extern void RTCode_PreEmptionRecoveryPtr(void) __asm__("PreEmptionRecoveryPtr");
+#define PreEmptionRecoveryPtr (*(void **) RTCode_PreEmptionRecoveryPtr)
+extern void RTCode_VectorClaimAddress(void) __asm__("VectorClaimAddress");
+#define VectorClaimAddress (*(const void * const volatile *) RTCode_VectorClaimAddress)
+extern void RTCode_PriorityTable(void) __asm__("PriorityTable");
+#define PriorityTable ((priority_t *) RTCode_PriorityTable)
+extern void RTCode_ErrorBlock_PollwordInUse(void) __asm__("ErrorBlock_PollwordInUse");
+#define ErrorBlock_PollwordInUse (*(_kernel_oserror *) RTCode_ErrorBlock_PollwordInUse)
+#ifdef DEBUGLIB
+extern void RTCode_asm_DADWriteC(void) __asm__("asm_DADWriteC");
+#define asm_DADWriteC (*(uint32_t *) RTCode_asm_DADWriteC)
+#endif
+#else
 extern thread_t * volatile * volatile ThreadTable;
 extern volatile size_t ThreadTableSize;
 extern volatile size_t NThreads;
@@ -113,7 +149,7 @@ extern _kernel_oserror ErrorBlock_PollwordInUse;
 #ifdef DEBUGLIB
 extern uint32_t asm_DADWriteC;
 #endif
-
+#endif
 
 /*****************************************************************************
 * Function prototypes
@@ -126,23 +162,15 @@ extern uint32_t asm_DADWriteC;
 /* the future. */
 /* Routines with APCS calling conditions are prototyped in comments. */
 
-extern uint32_t TestUnthreadV[];
-extern uint32_t Yield[];
-#define Yield(timed,pollword,timeout) \
-  ((*(bool (*)(bool, volatile const uint32_t *, uint32_t)) Yield)(timed, pollword, timeout))
-/* extern bool Yield(bool timed, volatile const uint32_t *pollword, uint32_t timeout); */
-extern uint32_t Die[];
-#define Die (*(void (*)(void)) Die)
-/* extern void Die(void); */
-extern uint32_t MyUnthreadV_OldKernel[];
-extern uint32_t MyUnthreadV[];
-extern uint32_t SomethingsGoneWrong[];
-#define SomethingsGoneWrong (*(void (*)(void)) SomethingsGoneWrong)
-/* extern void SomethingsGoneWrong(void); */
-extern uint32_t PreEmptionRecoveryCLREX[];
-extern uint32_t PreEmptionRecovery[];
-extern uint32_t ThreadResumed[];
-
+extern void TestUnthreadV(void);
+extern bool Yield(bool timed, volatile const uint32_t *pollword, uint32_t timeout);
+extern void Die(void);
+extern void MyUnthreadV_OldKernel(void);
+extern void MyUnthreadV(void);
+extern void SomethingsGoneWrong(void);
+extern void PreEmptionRecoveryCLREX(void);
+extern void PreEmptionRecovery(void);
+extern void ThreadResumed(void);
 
 #endif  /* end of sentry #ifdef */
 /*****************************************************************************
