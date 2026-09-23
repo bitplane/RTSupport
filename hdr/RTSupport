@@ -17,7 +17,7 @@
 OldOpt	SETA	{OPT}
 	OPT	OptNoList+OptNoP1List
 
-SWIClass        SETS    RTSWI_Name
+SWIClass        SETS    "RT"
 
         ^       RTSWI_Base
 
