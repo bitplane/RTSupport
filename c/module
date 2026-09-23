@@ -552,7 +552,7 @@ _kernel_oserror *module_SWIHandler(int swi_offset, _kernel_swi_regs *r, void *pw
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-_kernel_oserror *module_TickerVHandler(_kernel_swi_regs *r, void *pw)
+int module_TickerVHandler(_kernel_swi_regs *r, void *pw)
 {
   IGNORE(r);
   IGNORE(pw);
@@ -571,7 +571,7 @@ _kernel_oserror *module_TickerVHandler(_kernel_swi_regs *r, void *pw)
       thread->pollword = &Pollword_TimedOut;
     }
   }
-  return NULL;
+  return VECTOR_PASSON;
 }
 
 /*****************************************************************************

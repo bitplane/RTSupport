@@ -62,5 +62,6 @@ swi-decoding-table:	RTSWI_Name	Register,
 
 international-help-file:"RTSupport:Messages"
 
-generic-veneers:	tickerv_veneer/module_TickerVHandler,
-			seriouserrorv_veneer/module_SeriousErrorVHandler
+generic-veneers:	seriouserrorv_veneer/module_SeriousErrorVHandler
+
+vector-handlers:	tickerv_veneer/module_TickerVHandler
