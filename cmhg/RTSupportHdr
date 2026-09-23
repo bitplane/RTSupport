@@ -53,7 +53,9 @@ swi-chunk-base-number:	RTSWI_Base
 
 swi-handler-code:	module_SWIHandler
 
-swi-decoding-table:	RT	Register,
+#undef RT
+
+swi-decoding-table:	RT,	Register,
 					Deregister,
 					Yield,
 					TimedYield,
